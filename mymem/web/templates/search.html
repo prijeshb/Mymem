@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Search — MyMem{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-6">
+
+  <!-- Main: chat panel -->
+  <div class="space-y-4">
+    <div class="card">
+      <h1 class="text-lg font-semibold text-gray-100 mb-4">Chat with your wiki</h1>
+
+      <!-- Domain filter + query input -->
+      <div class="flex gap-2 mb-3">
+        <select id="domain-filter" class="text-sm bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-300">
+          <option value="">All domains</option>
+          {% for d in ['tech','spiritual','finance','health','reminder','research','personal','creative','business'] %}
+          <option value="{{ d }}" {% if active_domain == d %}selected{% endif %}>{{ d }}</option>
+          {% endfor %}
+        </select>
+        <label class="flex items-center gap-2 text-xs text-gray-500 ml-auto cursor-pointer">
+          <input type="checkbox" id="save-toggle" class="rounded" />
+          Save to wiki
+        </label>
+      </div>
+
+      <div class="flex gap-2">
+        <input id="q-input" type="text" placeholder="Ask a question…"
+               class="input flex-1" autofocus />
+        <button id="q-btn" class="btn-primary px-5">Ask</button>
+      </div>
+    </div>
+
+    <!-- Conversation history -->
+    <div id="chat-history" class="space-y-4"></div>
+  </div>
+
+  <!-- Right sidebar: page autocomplete -->
+  <aside class="space-y-4">
+    <div class="card">
+      <h2 class="section-title mb-3">Browse Pages</h2>
+      <input id="page-search" type="text" placeholder="Search pages…" class="input w-full mb-3" />
+      <div id="page-results" class="space-y-1 max-h-[60vh] overflow-y-auto"></div>
+    </div>
+  </aside>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const pages = {{ pages_json | tojson }};
+
+  // Page search
+  const pageSearch  = document.getElementById('page-search');
+  const pageResults = document.getElementById('page-results');
+
+  function renderPages(items) {
+    pageResults.innerHTML = items.slice(0, 30).map(p => `
+      <a href="/wiki/${p.title.toLowerCase().replace(/ /g,'-')}"
+         class="flex flex-col px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors group">
+        <span class="text-sm text-gray-200 group-hover:text-white">${p.title}</span>
+        <span class="text-xs text-gray-500 truncate">${p.summary || ''}</span>
+        <span class="domain-badge domain-${p.domain} mt-1">${p.domain}</span>
+      </a>`).join('') || '<p class="text-gray-500 text-sm px-3">No pages found.</p>';
+  }
+  renderPages(pages);
+  pageSearch.addEventListener('input', () => {
+    const q = pageSearch.value.toLowerCase();
+    renderPages(q ? pages.filter(p =>
+      p.title.toLowerCase().includes(q) || (p.summary||'').toLowerCase().includes(q)
+    ) : pages);
+  });
+
+  // Chat
+  document.getElementById('q-btn').addEventListener('click', ask);
+  document.getElementById('q-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') ask();
+  });
+
+  function ask() {
+    const q      = document.getElementById('q-input').value.trim();
+    if (!q) return;
+    const domain = document.getElementById('domain-filter').value;
+    const save   = document.getElementById('save-toggle').checked;
+    document.getElementById('q-input').value = '';
+
+    const history = document.getElementById('chat-history');
+
+    // User bubble
+    history.insertAdjacentHTML('beforeend', `
+      <div class="flex justify-end">
+        <div class="max-w-xl px-4 py-2.5 bg-indigo-600 text-white rounded-2xl rounded-br-sm text-sm">
+          ${escHtml(q)}
+        </div>
+      </div>`);
+
+    // Assistant bubble (streaming)
+    const id = 'msg-' + Date.now();
+    history.insertAdjacentHTML('beforeend', `
+      <div class="flex justify-start">
+        <div class="max-w-2xl w-full card space-y-2">
+          <div id="${id}-text" class="prose prose-invert prose-sm max-w-none text-gray-200 text-sm">
+            <span class="typing-dot">●</span>
+          </div>
+          <div id="${id}-cites" class="hidden flex flex-wrap gap-1.5"></div>
+        </div>
+      </div>`);
+
+    history.lastElementChild.scrollIntoView({ behavior: 'smooth' });
+
+    fetch('/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q, domain, top_k: 5, save }),
+    }).then(resp => {
+      const textEl  = document.getElementById(`${id}-text`);
+      const citesEl = document.getElementById(`${id}-cites`);
+      textEl.innerHTML = '';
+      let fullText = '';
+
+      const reader  = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+
+      function read() {
+        reader.read().then(({ done, value }) => {
+          if (done) {
+            textEl.innerHTML = marked.parse(fullText);
+            return;
+          }
+          buf += decoder.decode(value, { stream: true });
+          const parts = buf.split('\n\n');
+          buf = parts.pop() || '';
+          parts.forEach(part => {
+            const line = part.replace(/^data: /, '');
+            if (!line) return;
+            try {
+              const msg = JSON.parse(line);
+              if (msg.type === 'token') {
+                fullText += msg.text;
+                textEl.textContent = fullText;
+              }
+              if (msg.type === 'done' && msg.citations?.length) {
+                citesEl.classList.remove('hidden');
+                citesEl.innerHTML = msg.citations.map(c =>
+                  `<a href="/wiki/${c.toLowerCase().replace(/ /g,'-')}"
+                      class="citation-chip">[[${c}]]</a>`
+                ).join('');
+              }
+              if (msg.type === 'error') {
+                textEl.innerHTML = `<span class="text-red-400">${msg.message}</span>`;
+              }
+            } catch (_) {}
+          });
+          read();
+        });
+      }
+      read();
+    });
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+</script>
+{% endblock %}

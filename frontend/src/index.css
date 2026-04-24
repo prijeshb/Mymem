@@ -1,0 +1,239 @@
+@import "tailwindcss";
+@import "@heroui/styles";
+@plugin "@tailwindcss/typography";
+
+/* ── Design System Tokens (UI UX Pro Max — MyMem) ─────────────────────────── */
+@theme {
+  /* Brand / CTA */
+  --color-brand:          #2563EB;
+  --color-brand-hover:    #1d4ed8;
+  --color-brand-soft:     #dbeafe;
+
+  /* Palette */
+  --color-primary:        #475569;
+  --color-secondary:      #64748B;
+
+  /* Surfaces — light (defaults) */
+  --color-bg:             #F8FAFC;
+  --color-surface-raised: #F1F5F9;
+  --color-border:         #E2E8F0;
+
+  /* Text — light */
+  --color-text:           #1E293B;
+  --color-text-muted:     #64748B;
+  --color-text-subtle:    #94A3B8;
+
+  /* Shadows */
+  --shadow-sm:  0 1px 2px rgba(0,0,0,0.05);
+  --shadow-md:  0 4px 6px rgba(0,0,0,0.07);
+  --shadow-lg:  0 10px 15px rgba(0,0,0,0.08);
+
+  /* Typography */
+  --font-heading: 'Merriweather', Georgia, serif;
+  --font-body:    'Poppins', system-ui, sans-serif;
+  --font-sans:    'Poppins', system-ui, sans-serif;
+  --font-mono:    ui-monospace, 'Cascadia Code', monospace;
+}
+
+/* ── Dark mode (class-based) ────────────────────────────────────────────────── */
+@variant dark (&:where(.dark, .dark *));
+
+/* Bootstrap 5.3-inspired surface tokens */
+:root {
+  --color-surface: #ffffff;
+}
+.dark {
+  --color-surface: #2b3035;
+}
+
+/* ── HeroUI button text color overrides ─────────────────────────────────────── */
+.button--primary,
+.button--danger {
+  --button-fg: #ffffff !important;
+  color: #ffffff !important;
+}
+.button--secondary,
+.button--tertiary,
+.button--outline {
+  --button-fg: #1e293b !important;
+  color: #1e293b !important;
+}
+.dark .button--secondary,
+.dark .button--tertiary,
+.dark .button--outline {
+  --button-fg: #f1f5f9 !important;
+  color: #f1f5f9 !important;
+}
+
+/* ── Base ────────────────────────────────────────────────────────────────────── */
+html {
+  color-scheme: light;
+  font-family: var(--font-body);
+}
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
+}
+
+/* ── Dark mode surface overrides — Bootstrap 5.3 palette ───────────────────── */
+/* Body: #212529 • Surface: #2b3035 • Raised: #343a40 • Border: #495057       */
+/* Text: #dee2e6 • Muted: #adb5bd • Subtle: #6c757d • Emphasis: #fff          */
+.dark body                     { background-color: #212529; color: #dee2e6; }
+.dark h1, .dark h2, .dark h3,
+.dark h4, .dark h5, .dark h6   { color: #6ea8fe; }
+.dark .prose h1, .dark .prose h2, .dark .prose h3,
+.dark .prose h4, .dark .prose h5, .dark .prose h6 { color: #6ea8fe !important; }
+
+/* Panels / cards */
+.dark .bg-gray-900             { background-color: #2b3035 !important; }
+.dark .bg-gray-950             { background-color: #212529 !important; }
+.dark .bg-gray-800             { background-color: #343a40 !important; }
+.dark .border-gray-800         { border-color: #495057 !important; }
+.dark .border-gray-700         { border-color: #6c757d !important; }
+.dark .border-gray-600         { border-color: #868e96 !important; }
+
+/* Text */
+.dark .text-gray-100           { color: #f8f9fa !important; }
+.dark .text-gray-200           { color: #e9ecef !important; }
+.dark .text-gray-300           { color: #dee2e6 !important; }
+.dark .text-gray-400           { color: #adb5bd !important; }
+.dark .text-gray-500           { color: #6c757d !important; }
+.dark .text-gray-600           { color: #495057 !important; }
+
+/* Inputs */
+.dark input,
+.dark textarea,
+.dark select {
+  background-color: #2b3035 !important;
+  color: #dee2e6 !important;
+  border-color: #495057 !important;
+}
+.dark input::placeholder,
+.dark textarea::placeholder    { color: #6c757d !important; }
+
+/* Nav */
+.dark nav {
+  background: rgba(33, 37, 41, 0.95) !important;
+  border-color: #495057 !important;
+}
+
+/* ── Light mode — all bg-gray-* classes map to design system surfaces ────────── */
+html:not(.dark) body           { background-color: #F8FAFC; color: #1E293B; }
+
+html:not(.dark) nav {
+  background: rgba(255,255,255,0.92) !important;
+  border-color: #E2E8F0 !important;
+}
+html:not(.dark) nav a          { color: #475569; }
+html:not(.dark) nav a:hover    { color: #1E293B; }
+
+html:not(.dark) .bg-gray-900   { background-color: #FFFFFF !important; border-color: #E2E8F0; }
+html:not(.dark) .bg-gray-950   { background-color: #F8FAFC !important; }
+html:not(.dark) .bg-gray-800   { background-color: #F1F5F9 !important; }
+html:not(.dark) .border-gray-800 { border-color: #E2E8F0 !important; }
+html:not(.dark) .border-gray-700 { border-color: #CBD5E1 !important; }
+html:not(.dark) .border-gray-600 { border-color: #94A3B8 !important; }
+
+html:not(.dark) .text-gray-100 { color: #212529 !important; }
+html:not(.dark) .text-gray-200 { color: #343a40 !important; }
+html:not(.dark) .text-gray-300 { color: #495057 !important; }
+html:not(.dark) .text-gray-400 { color: #495057 !important; }  /* was #64748B — failed AA */
+html:not(.dark) .text-gray-500 { color: #6c757d !important; }
+html:not(.dark) .text-gray-600 { color: #6c757d !important; }
+
+html:not(.dark) input,
+html:not(.dark) textarea,
+html:not(.dark) select {
+  background-color: #fff !important;
+  color: #1E293B !important;
+  border-color: #CBD5E1 !important;
+  color-scheme: light;
+}
+html:not(.dark) input::placeholder,
+html:not(.dark) textarea::placeholder { color: #94A3B8 !important; }
+
+html:not(.dark) .bg-gray-700   { background-color: #CBD5E1 !important; color: #1E293B !important; }
+
+html:not(.dark) button.bg-gray-800,
+html:not(.dark) button.hover\:bg-gray-800:hover {
+  background-color: #E2E8F0 !important;
+  color: #334155 !important;
+}
+html:not(.dark) button.bg-gray-700 {
+  background-color: #CBD5E1 !important;
+  color: #1E293B !important;
+}
+html:not(.dark) button          { color: inherit; }
+html:not(.dark) button.text-gray-300,
+html:not(.dark) button.text-gray-400,
+html:not(.dark) button.text-gray-500 { color: #475569 !important; }
+html:not(.dark) button.border-transparent { border-color: #CBD5E1 !important; }
+html:not(.dark) button.bg-indigo-600 { color: #fff !important; }
+
+html:not(.dark) nav .border-gray-700 {
+  border-color: #CBD5E1 !important;
+  color: #475569 !important;
+}
+
+html:not(.dark) input[type="file"]::file-selector-button {
+  background-color: #2563EB;
+  color: #fff;
+  border: none;
+}
+
+html:not(.dark) .opacity-60    { opacity: 0.75; }
+html:not(.dark) { scrollbar-color: #CBD5E1 #F8FAFC; }
+
+/* ── Prose dark mode token overrides ─────────────────────────────────────────── */
+/* Components use `prose dark:prose-invert` — no need for a light-mode hack.     */
+.dark .prose {
+  --tw-prose-invert-headings: #6ea8fe;
+  --tw-prose-invert-links:    #6ea8fe;
+  --tw-prose-invert-code:     #dee2e6;
+  --tw-prose-invert-pre-bg:   #2b3035;
+}
+
+/* ── Wikilinks ───────────────────────────────────────────────────────────────── */
+a.wikilink {
+  @apply text-blue-600 no-underline border-b border-blue-300
+         hover:text-blue-800 hover:border-blue-500 transition-colors;
+}
+.dark a.wikilink {
+  @apply text-blue-400 border-blue-700 hover:text-blue-200 hover:border-blue-400;
+}
+a.wikilink:focus {
+  outline: 2px solid #2563EB;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+a.wikilink.broken {
+  @apply text-amber-500 dark:text-amber-400 border-amber-300 dark:border-amber-700
+         cursor-pointer hover:text-amber-700 dark:hover:text-amber-300 select-none;
+}
+
+/* ── Headings ───────────────────────────────────────────────────────────────── */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  color: #2563EB;
+}
+
+/* ── Prose headings ─────────────────────────────────────────────────────────── */
+.prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+  scroll-margin-top: 6rem;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  color: #2563EB !important;
+}
+
+/* ── Typing indicator ────────────────────────────────────────────────────────── */
+@keyframes pulse-opacity { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }
+.typing-dot { animation: pulse-opacity 1s infinite; color: #2563EB; }

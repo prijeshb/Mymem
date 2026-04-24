@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% block title %}{{ page.title }} — MyMem{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-[200px_1fr_220px] gap-6">
+
+  <!-- Left: Scroll-spy TOC -->
+  <aside class="hidden lg:block">
+    <div class="card sticky top-20">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="section-title">Contents</h2>
+        <button id="toggle-view" class="text-xs text-indigo-400 hover:text-indigo-300">Graph</button>
+      </div>
+      <!-- TOC view -->
+      <nav id="toc-view">
+        {% if toc %}
+        <ul class="space-y-1">
+          {% for item in toc %}
+          <li style="padding-left: {{ (item.level - 1) * 10 }}px">
+            <a href="#{{ item.id }}"
+               class="toc-link text-xs text-gray-400 hover:text-indigo-300 block py-0.5 transition-colors"
+               data-id="{{ item.id }}">
+              {{ item.text }}
+            </a>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-xs text-gray-600">No headings.</p>
+        {% endif %}
+      </nav>
+      <!-- Mini graph view (hidden by default) -->
+      <div id="graph-view" class="hidden">
+        <svg id="mini-graph" width="180" height="200"></svg>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Center: Wiki page content -->
+  <article class="min-w-0">
+    <div class="card">
+      <!-- Header -->
+      <div class="mb-5 pb-4 border-b border-gray-800">
+        <div class="flex items-start justify-between gap-4">
+          <h1 class="text-2xl font-bold text-gray-50">{{ page.title }}</h1>
+          <span class="domain-badge domain-{{ page.domain.value }} mt-1">{{ page.domain.value }}</span>
+        </div>
+        <div class="flex flex-wrap gap-1.5 mt-2">
+          {% for tag in page.tags %}
+          <span class="px-2 py-0.5 text-xs rounded-full bg-gray-800 text-gray-400">#{{ tag }}</span>
+          {% endfor %}
+        </div>
+        <div class="text-xs text-gray-600 mt-2">
+          Created {{ page.created }} · Updated {{ page.updated }}
+          {% if page.sources %}· Sources: {{ page.sources | join(', ') }}{% endif %}
+        </div>
+      </div>
+
+      <!-- Body -->
+      <div id="wiki-body" class="prose prose-invert prose-sm max-w-none">
+        {{ body_html | safe }}
+      </div>
+
+      <!-- Edit metadata panel -->
+      <details id="edit-panel" class="mt-6 border-t border-gray-800 pt-4">
+        <summary class="text-xs text-gray-500 hover:text-gray-300 cursor-pointer select-none">
+          Edit domain &amp; tags
+        </summary>
+        <div class="mt-4 space-y-3">
+          <div>
+            <label for="edit-domain" class="block text-xs text-gray-400 mb-1">Domain</label>
+            <select id="edit-domain" class="input w-full text-sm">
+              {% for d in ['spiritual','tech','finance','health','reminder','research','personal','creative','business','misc'] %}
+              <option value="{{ d }}" {% if d == page.domain.value %}selected{% endif %}>{{ d }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label for="edit-tags" class="block text-xs text-gray-400 mb-1">Tags <span class="text-gray-600">(comma separated)</span></label>
+            <input id="edit-tags" type="text" class="input w-full text-sm"
+                   value="{{ page.tags | join(', ') }}" />
+          </div>
+          <div class="flex items-center gap-3">
+            <button id="btn-save-meta" class="btn-primary px-4 py-1.5 text-sm">Save</button>
+            <span id="save-status" class="text-xs hidden"></span>
+          </div>
+        </div>
+      </details>
+    </div>
+  </article>
+
+  <!-- Right: Backlinks -->
+  <aside class="hidden lg:block">
+    <div class="card sticky top-20">
+      <h2 class="section-title mb-3">Backlinks</h2>
+      {% if backlinks %}
+      <ul class="space-y-1">
+        {% for bl in backlinks %}
+        <li>
+          <a href="/wiki/{{ bl.slug }}"
+             class="text-xs text-gray-400 hover:text-indigo-300 block py-1 transition-colors">
+            ← {{ bl.title }}
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="text-xs text-gray-600">No backlinks yet.</p>
+      {% endif %}
+    </div>
+  </aside>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Scroll-spy TOC
+  const tocLinks = document.querySelectorAll('.toc-link');
+  const headings = Array.from(document.querySelectorAll('#wiki-body h1,h2,h3'));
+
+  window.addEventListener('scroll', () => {
+    let current = '';
+    headings.forEach(h => {
+      if (h.getBoundingClientRect().top <= 120) current = h.id;
+    });
+    tocLinks.forEach(a => {
+      a.classList.toggle('text-indigo-300', a.dataset.id === current);
+      a.classList.toggle('text-gray-400',   a.dataset.id !== current);
+    });
+  }, { passive: true });
+
+  // TOC ↔ Graph toggle
+  document.getElementById('toggle-view').addEventListener('click', function() {
+    const toc   = document.getElementById('toc-view');
+    const graph = document.getElementById('graph-view');
+    const hidden = toc.classList.contains('hidden');
+    toc.classList.toggle('hidden', !hidden);
+    graph.classList.toggle('hidden', hidden);
+    this.textContent = hidden ? 'Graph' : 'Contents';
+    if (!hidden) renderMiniGraph();
+  });
+
+  // Edit domain + tags
+  document.getElementById('btn-save-meta').addEventListener('click', async () => {
+    const btn    = document.getElementById('btn-save-meta');
+    const status = document.getElementById('save-status');
+    const domain = document.getElementById('edit-domain').value;
+    const tags   = document.getElementById('edit-tags').value
+                     .split(',').map(t => t.trim()).filter(Boolean);
+    const slug   = {{ page.path.stem | tojson }};
+
+    btn.disabled = true;
+    status.textContent = 'Saving…';
+    status.className   = 'text-xs text-gray-400';
+    status.classList.remove('hidden');
+
+    try {
+      const resp = await fetch(`/api/page/${slug}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ domain, tags }),
+      });
+      if (!resp.ok) throw new Error((await resp.json()).detail || 'Save failed');
+      status.textContent = '✓ Saved';
+      status.className   = 'text-xs text-green-400';
+      // Update the visible domain badge without reload
+      document.querySelector('.domain-badge').textContent = domain;
+      document.querySelector('.domain-badge').className =
+        `domain-badge domain-${domain} mt-1`;
+    } catch (err) {
+      status.textContent = '✗ ' + err.message;
+      status.className   = 'text-xs text-red-400';
+    } finally {
+      btn.disabled = false;
+      setTimeout(() => status.classList.add('hidden'), 3000);
+    }
+  });
+
+  // Mini force-directed graph (local page + neighbors)
+  function renderMiniGraph() {
+    fetch('/api/graph').then(r => r.json()).then(({ nodes, edges }) => {
+      const title = {{ page.title | tojson }};
+      const linked = new Set(
+        edges.filter(e => e.source === title || e.target === title)
+             .flatMap(e => [e.source, e.target])
+      );
+      const localNodes = nodes.filter(n => linked.has(n.id));
+      const localEdges = edges.filter(e => linked.has(e.source) && linked.has(e.target));
+
+      const svg = d3.select('#mini-graph');
+      svg.selectAll('*').remove();
+      const W = 180, H = 200;
+
+      const sim = d3.forceSimulation(localNodes)
+        .force('link', d3.forceLink(localEdges).id(d => d.id).distance(50))
+        .force('charge', d3.forceManyBody().strength(-80))
+        .force('center', d3.forceCenter(W / 2, H / 2));
+
+      const link = svg.append('g').selectAll('line')
+        .data(localEdges).join('line')
+        .attr('stroke', '#374151').attr('stroke-width', 1);
+
+      const node = svg.append('g').selectAll('circle')
+        .data(localNodes).join('circle')
+        .attr('r', d => d.id === title ? 8 : 5)
+        .attr('fill', d => d.id === title ? '#6366f1' : '#4b5563')
+        .attr('cursor', 'pointer')
+        .on('click', (_, d) => { window.location = '/wiki/' + d.slug; });
+
+      node.append('title').text(d => d.id);
+
+      sim.on('tick', () => {
+        link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+            .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+        node.attr('cx', d => d.x).attr('cy', d => d.y);
+      });
+    });
+  }
+</script>
+{% endblock %}

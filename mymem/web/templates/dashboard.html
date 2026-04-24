@@ -1,0 +1,264 @@
+{% extends "base.html" %}
+{% block title %}MyMem — Dashboard{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-6">
+
+  <!-- Left sidebar -->
+  <aside class="space-y-5">
+
+    <!-- Stats -->
+    <div class="card">
+      <h2 class="section-title">Wiki Stats</h2>
+      <div class="space-y-2 mt-3">
+        <div class="stat-row"><span class="stat-label">Pages</span><span class="stat-value">{{ page_count }}</span></div>
+        <div class="stat-row"><span class="stat-label">Sources</span><span class="stat-value">{{ source_count }}</span></div>
+        <div class="stat-row"><span class="stat-label">Entries</span><span class="stat-value">{{ entry_count }}</span></div>
+      </div>
+    </div>
+
+    <!-- Activity heatmap -->
+    <div class="card">
+      <h2 class="section-title mb-3">Activity</h2>
+      <div id="heatmap" class="flex gap-0.5" title="16-week activity"></div>
+      <div class="flex justify-between text-xs text-gray-600 mt-1">
+        <span id="hm-start"></span>
+        <span id="hm-end"></span>
+      </div>
+      <div id="hm-tooltip"
+           class="hidden fixed z-50 px-2 py-1 text-xs bg-gray-900 border border-gray-700 rounded shadow-lg pointer-events-none text-gray-200"></div>
+    </div>
+
+    <!-- Curiosity bars -->
+    {% if domain_counts %}
+    <div class="card">
+      <h2 class="section-title">Curiosity</h2>
+      {% set max_count = domain_counts.values() | max %}
+      <div class="space-y-2 mt-3">
+        {% for domain in domains[:6] %}
+        {% set count = domain_counts[domain] %}
+        <div>
+          <div class="flex justify-between text-xs mb-0.5">
+            <a href="/search?domain={{ domain }}" class="text-gray-400 hover:text-indigo-300">{{ domain }}</a>
+            <span class="text-gray-500">{{ count }}</span>
+          </div>
+          <div class="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+            <div class="h-full bg-indigo-500 rounded-full"
+                 style="width: {{ (count / max_count * 100) | int }}%"></div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Recent log -->
+    {% if recent_log %}
+    <div class="card">
+      <h2 class="section-title">Recent Activity</h2>
+      <ul class="mt-3 space-y-2">
+        {% for entry in recent_log %}
+        <li class="text-xs">
+          <span class="inline-block w-14 text-gray-500">{{ entry.timestamp.strftime('%H:%M') }}</span>
+          <span class="badge-{{ entry.operation.value }}">{{ entry.operation.value }}</span>
+          <span class="text-gray-400 ml-1 truncate">{{ entry.description[:40] }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    <!-- Introspect link -->
+    <a href="/introspect"
+       class="block card hover:border-indigo-600 transition-colors text-center py-3">
+      <div class="text-indigo-400 font-medium text-sm">✦ Introspect Today</div>
+      <div class="text-gray-500 text-xs mt-0.5">Daily summary + suggestions</div>
+    </a>
+
+  </aside>
+
+  <!-- Main area: search + results -->
+  <div class="space-y-5">
+
+    <!-- Quick search / chat -->
+    <div class="card">
+      <h2 class="section-title mb-3">Ask your wiki</h2>
+      <div class="flex gap-2">
+        <input id="q-input" type="text" placeholder="What would you like to know?"
+               class="input flex-1" />
+        <button id="q-btn" class="btn-primary px-4">Ask</button>
+      </div>
+      <div class="flex gap-2 mt-2">
+        <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer">
+          <input type="checkbox" id="q-save" class="rounded" />
+          Save answer to wiki
+        </label>
+        <select id="q-domain" class="ml-auto text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-300">
+          <option value="">All domains</option>
+          {% for d in ['tech','spiritual','finance','health','reminder','research','personal','creative','business'] %}
+          <option value="{{ d }}">{{ d }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- Answer stream -->
+      <div id="answer-box" class="hidden mt-4">
+        <div id="answer-text" class="prose prose-invert prose-sm max-w-none text-gray-200"></div>
+        <div id="citations" class="hidden mt-3 flex flex-wrap gap-2"></div>
+      </div>
+    </div>
+
+    <!-- Page list -->
+    <div class="card">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="section-title">Pages</h2>
+        <input id="page-filter" type="text" placeholder="Filter…"
+               class="input text-sm w-40" />
+      </div>
+      <div id="page-list" class="space-y-1">
+        <div class="text-gray-500 text-sm text-center py-4">Loading…</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Load page list
+  fetch('/api/pages').then(r => r.json()).then(pages => {
+    const list = document.getElementById('page-list');
+    const filter = document.getElementById('page-filter');
+    window._pages = pages;
+
+    function render(items) {
+      list.innerHTML = items.length
+        ? items.map(p => `
+          <a href="/wiki/${p.title.toLowerCase().replace(/ /g, '-')}"
+             class="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-gray-800 group transition-colors">
+            <span class="text-sm text-gray-200 group-hover:text-white">${p.title}</span>
+            <span class="domain-badge domain-${p.domain}">${p.domain}</span>
+          </a>`).join('')
+        : '<div class="text-gray-500 text-sm text-center py-4">No pages found.</div>';
+    }
+    render(pages);
+
+    filter.addEventListener('input', () => {
+      const q = filter.value.toLowerCase();
+      render(q ? pages.filter(p =>
+        p.title.toLowerCase().includes(q) || p.summary.toLowerCase().includes(q)
+      ) : pages);
+    });
+  });
+
+  // Ask question
+  document.getElementById('q-btn').addEventListener('click', askQuestion);
+  document.getElementById('q-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') askQuestion();
+  });
+
+  function askQuestion() {
+    const q = document.getElementById('q-input').value.trim();
+    if (!q) return;
+    const save   = document.getElementById('q-save').checked;
+    const domain = document.getElementById('q-domain').value;
+    const box    = document.getElementById('answer-box');
+    const text   = document.getElementById('answer-text');
+    const cites  = document.getElementById('citations');
+
+    box.classList.remove('hidden');
+    text.textContent = '';
+    cites.classList.add('hidden');
+    cites.innerHTML  = '';
+
+    fetch('/api/query', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q, domain, top_k: 5, save }),
+    }).then(resp => {
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      function read() {
+        reader.read().then(({ done, value }) => {
+          if (done) return;
+          buf += decoder.decode(value, { stream: true });
+          const parts = buf.split('\n\n');
+          buf = parts.pop() || '';
+          parts.forEach(part => {
+            const line = part.replace(/^data: /, '');
+            if (!line) return;
+            try {
+              const msg = JSON.parse(line);
+              if (msg.type === 'token') text.textContent += msg.text;
+              if (msg.type === 'done' && msg.citations?.length) {
+                cites.classList.remove('hidden');
+                cites.innerHTML = msg.citations.map(c =>
+                  `<a href="/wiki/${c.toLowerCase().replace(/ /g,'-')}"
+                      class="citation-chip">[[${c}]]</a>`
+                ).join('');
+              }
+            } catch (_) {}
+          });
+          read();
+        });
+      }
+      read();
+    });
+  }
+
+  // Activity heatmap
+  (function () {
+    const days    = {{ heatmap_days | safe }};
+    const maxCount = Math.max(1, ...days.map(d => d.count));
+
+    function cellColor(count) {
+      if (count === 0) return '#1f2937';           // gray-800 — empty
+      const t = count / maxCount;
+      if (t < 0.25) return '#312e81';             // indigo-900
+      if (t < 0.5)  return '#4338ca';             // indigo-700
+      if (t < 0.75) return '#6366f1';             // indigo-500
+      return '#a5b4fc';                            // indigo-300 — hottest
+    }
+
+    // Group into columns of 7 (Mon–Sun weeks)
+    const container = document.getElementById('heatmap');
+    const tooltip   = document.getElementById('hm-tooltip');
+    const COLS = Math.ceil(days.length / 7);
+
+    for (let col = 0; col < COLS; col++) {
+      const colDiv = document.createElement('div');
+      colDiv.className = 'flex flex-col gap-0.5';
+      for (let row = 0; row < 7; row++) {
+        const idx  = col * 7 + row;
+        const cell = document.createElement('div');
+        cell.style.width  = '10px';
+        cell.style.height = '10px';
+        cell.style.borderRadius = '2px';
+        if (idx < days.length) {
+          const { date, count } = days[idx];
+          cell.style.backgroundColor = cellColor(count);
+          cell.addEventListener('mouseenter', e => {
+            tooltip.textContent = `${date}: ${count} event${count !== 1 ? 's' : ''}`;
+            tooltip.classList.remove('hidden');
+          });
+          cell.addEventListener('mousemove', e => {
+            tooltip.style.left = (e.clientX + 12) + 'px';
+            tooltip.style.top  = (e.clientY - 28) + 'px';
+          });
+          cell.addEventListener('mouseleave', () => tooltip.classList.add('hidden'));
+        } else {
+          cell.style.backgroundColor = 'transparent';
+        }
+        colDiv.appendChild(cell);
+      }
+      container.appendChild(colDiv);
+    }
+
+    // Date labels
+    document.getElementById('hm-start').textContent = days[0].date.slice(0, 7);
+    document.getElementById('hm-end').textContent   = days[days.length - 1].date.slice(0, 7);
+  })();
+</script>
+{% endblock %}

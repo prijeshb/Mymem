@@ -1,0 +1,55 @@
+# MyMem Configuration
+# All secrets go in .env — never in this file.
+
+paths:
+  raw: raw/
+  wiki: wiki/
+  outputs: outputs/
+  db: data/mymem.db
+
+# LLM provider: anthropic | ollama | openai
+provider: ollama
+
+# Model per task (Ollama local models)
+models:
+  compile:       gemma4:31b-cloud   # raw → wiki article
+  merge:         gemma4:31b-cloud   # merge compiled chunks
+  qa:            gemma4:31b-cloud   # research Q&A
+  lint:          gemma4:12b         # health checks (lighter)
+  classify:      gemma4:12b         # domain/tag classification
+  introspect:    gemma4:31b-cloud   # daily summary + recommendations
+  export_slides: gemma4:12b
+  export_charts: gemma4:12b
+  embed: nomic-embed-text           # embeddings (local Ollama, optional)
+
+# Ollama settings (used when provider = ollama)
+ollama:
+  base_url: http://localhost:11434
+  timeout_s: 120
+
+# Anthropic settings (used when provider = anthropic)
+# Model overrides for task routing:
+# anthropic_models:
+#   compile: claude-sonnet-4-6
+#   lint: claude-haiku-4-5-20251001
+#   qa: claude-sonnet-4-6
+
+# Observability
+observability:
+  log_level: INFO             # DEBUG | INFO | WARNING | ERROR
+  log_format: rich            # rich (dev) | json (prod)
+  log_file: data/mymem.log    # null to disable file logging
+  trace_llm_calls: true       # record latency + token costs to DB
+  cost_alert_usd: 1.0         # warn when session cost exceeds this
+
+# Security
+security:
+  scan_ingested_content: true   # scan raw files for leaked secrets
+  prompt_injection_guard: true  # sanitize user queries before LLM
+  max_file_size_mb: 50          # reject files larger than this
+
+# Pipeline
+pipeline:
+  compile_batch_size: 5         # articles compiled in parallel
+  index_on_compile: true        # auto-index after each compile
+  skip_unchanged: true          # hash-check: skip if raw file unchanged

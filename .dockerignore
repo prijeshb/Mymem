@@ -1,0 +1,39 @@
+# Secrets — never in image
+.env
+.env.*
+!.env.example
+
+# Python build artifacts
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Local data — mounted as volumes at runtime
+data/
+wiki/
+raw/
+outputs/
+
+# Node — frontend is built in the Docker stage
+node_modules/
+frontend/dist/
+
+# Version control and IDE
+.git/
+.gitignore
+.claude/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% block title %}Ingest — MyMem{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+  <div class="card">
+    <h1 class="text-lg font-semibold text-gray-100 mb-6">Ingest a Source</h1>
+
+    <!-- Tabs -->
+    <div class="flex gap-1 mb-6 p-1 bg-gray-800 rounded-lg" role="tablist" aria-label="Ingest method">
+      <button id="tab-url"  role="tab" aria-selected="true"  aria-controls="panel-url"
+              class="tab-btn flex-1 py-1.5 rounded-md text-sm font-medium transition-colors
+                     bg-gray-700 text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        URL / Path
+      </button>
+      <button id="tab-file" role="tab" aria-selected="false" aria-controls="panel-file"
+              class="tab-btn flex-1 py-1.5 rounded-md text-sm font-medium transition-colors
+                     text-gray-400 hover:text-gray-200 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        Upload File
+      </button>
+    </div>
+
+    <!-- Shared fields -->
+    <div class="space-y-4 mb-5">
+      <div>
+        <label for="source-type" class="label block mb-1 text-gray-300">Source type</label>
+        <select id="source-type" class="input w-full"
+                aria-label="Source type">
+          {% for t in ['article','paper','repo','dataset','image','youtube','podcast','tweet','webpage','book','newsletter','note'] %}
+          <option value="{{ t }}">{{ t }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div>
+        <label for="domain" class="label block mb-1 text-gray-300">Domain</label>
+        <select id="domain" class="input w-full" aria-label="Domain">
+          <option value="">Auto-detect</option>
+          {% for d in domains %}
+          <option value="{{ d }}">{{ d }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div>
+        <label for="tags" class="label block mb-1 text-gray-300">
+          Tags <span class="text-gray-500 font-normal">(comma separated)</span>
+        </label>
+        <input id="tags" type="text" class="input w-full"
+               placeholder="ml, python, tutorial"
+               aria-label="Tags, comma separated" />
+      </div>
+    </div>
+
+    <!-- Panel: URL / Path -->
+    <div id="panel-url" role="tabpanel" aria-labelledby="tab-url">
+      <form id="form-url" class="space-y-4">
+        <div>
+          <label for="source-url" class="label block mb-1 text-gray-300">URL or server file path</label>
+          <input id="source-url" type="text" class="input w-full"
+                 placeholder="https://example.com/article"
+                 aria-label="Source URL or file path"
+                 required />
+          <p class="mt-1 text-xs text-gray-500">
+            Paste a URL, or a path relative to the server's working directory
+            (e.g. <code class="text-gray-400">raw/articles/my-file.md</code>).
+            To upload a local file, use the <strong class="text-gray-300">Upload File</strong> tab.
+          </p>
+        </div>
+        <button type="submit" id="btn-url" class="btn-primary w-full py-2.5"
+                aria-label="Ingest from URL or path">
+          Ingest Source
+        </button>
+      </form>
+    </div>
+
+    <!-- Panel: File upload -->
+    <div id="panel-file" role="tabpanel" aria-labelledby="tab-file" class="hidden">
+      <form id="form-file" class="space-y-4">
+        <div>
+          <label for="file-input" class="label block mb-1 text-gray-300">Choose file</label>
+          <input id="file-input" type="file"
+                 accept=".md,.txt,.pdf,.html,.rst,.json,.csv"
+                 class="block w-full text-sm text-gray-300
+                        file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0
+                        file:text-sm file:font-medium
+                        file:bg-indigo-600 file:text-white
+                        hover:file:bg-indigo-500
+                        focus:outline-none focus:ring-2 focus:ring-indigo-500
+                        cursor-pointer"
+                 aria-label="Choose a file to upload"
+                 required />
+          <p class="mt-1 text-xs text-gray-500">Supports .md, .txt, .pdf, .html, .rst, .json, .csv</p>
+        </div>
+        <button type="submit" id="btn-file" class="btn-primary w-full py-2.5"
+                aria-label="Upload and ingest file">
+          Upload &amp; Ingest
+        </button>
+      </form>
+    </div>
+
+    <!-- Result -->
+    <div id="result" class="hidden mt-6 p-4 rounded-lg border" role="alert" aria-live="polite"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // ---------------------------------------------------------------------------
+  // Tab switching
+  // ---------------------------------------------------------------------------
+  const tabs = {
+    url:  { btn: document.getElementById('tab-url'),  panel: document.getElementById('panel-url') },
+    file: { btn: document.getElementById('tab-file'), panel: document.getElementById('panel-file') },
+  };
+
+  function switchTab(active) {
+    Object.entries(tabs).forEach(([key, { btn, panel }]) => {
+      const isActive = key === active;
+      btn.setAttribute('aria-selected', isActive);
+      btn.className = btn.className
+        .replace(/bg-gray-700 text-gray-100|text-gray-400 hover:text-gray-200/g, '').trim();
+      btn.className += isActive
+        ? ' bg-gray-700 text-gray-100'
+        : ' text-gray-400 hover:text-gray-200';
+      panel.classList.toggle('hidden', !isActive);
+    });
+  }
+
+  tabs.url.btn.addEventListener('click',  () => switchTab('url'));
+  tabs.file.btn.addEventListener('click', () => switchTab('file'));
+
+  // ---------------------------------------------------------------------------
+  // Shared helpers
+  // ---------------------------------------------------------------------------
+  function getShared() {
+    return {
+      source_type: document.getElementById('source-type').value,
+      domain:      document.getElementById('domain').value,
+      tags:        document.getElementById('tags').value
+                     .split(',').map(t => t.trim()).filter(Boolean),
+    };
+  }
+
+  function showResult(ok, html) {
+    const el = document.getElementById('result');
+    el.className = ok
+      ? 'mt-6 p-4 rounded-lg border border-green-600 bg-green-950 text-green-200'
+      : 'mt-6 p-4 rounded-lg border border-red-600 bg-red-950 text-red-200';
+    el.innerHTML = html;
+    el.classList.remove('hidden');
+  }
+
+  function renderData(data) {
+    if (data.skipped) {
+      showResult(false, `<strong>Skipped:</strong> ${data.skip_reason}`);
+    } else {
+      showResult(true, `
+        <div class="font-semibold mb-2">&#10003; Ingest complete</div>
+        <div class="text-sm space-y-1">
+          <div>New pages: <strong>${data.pages_written.join(', ') || 'none'}</strong></div>
+          <div>Updated:   <strong>${data.pages_updated.join(', ') || 'none'}</strong></div>
+          <div>Chunks:    <strong>${data.chunk_count}</strong></div>
+        </div>`);
+    }
+  }
+
+  function setLoading(btn, loading) {
+    btn.disabled = loading;
+    btn.textContent = loading ? 'Ingesting\u2026' : btn.dataset.label;
+  }
+
+  document.getElementById('btn-url').dataset.label  = 'Ingest Source';
+  document.getElementById('btn-file').dataset.label = 'Upload & Ingest';
+
+  // ---------------------------------------------------------------------------
+  // URL / path form
+  // ---------------------------------------------------------------------------
+  document.getElementById('form-url').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = document.getElementById('btn-url');
+    setLoading(btn, true);
+    const shared = getShared();
+    try {
+      const resp = await fetch('/api/ingest', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          source: document.getElementById('source-url').value.trim(),
+          ...shared,
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || 'Ingest failed');
+      renderData(data);
+    } catch (err) {
+      showResult(false, `<strong>Error:</strong> ${err.message}`);
+    } finally {
+      setLoading(btn, false);
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // File upload form
+  // ---------------------------------------------------------------------------
+  document.getElementById('form-file').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn  = document.getElementById('btn-file');
+    const file = document.getElementById('file-input').files[0];
+    if (!file) return;
+    setLoading(btn, true);
+    const shared = getShared();
+    const fd = new FormData();
+    fd.append('file',        file);
+    fd.append('source_type', shared.source_type);
+    fd.append('domain',      shared.domain);
+    fd.append('tags',        shared.tags.join(','));
+    try {
+      const resp = await fetch('/api/upload', { method: 'POST', body: fd });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || 'Upload failed');
+      renderData(data);
+    } catch (err) {
+      showResult(false, `<strong>Error:</strong> ${err.message}`);
+    } finally {
+      setLoading(btn, false);
+    }
+  });
+</script>
+{% endblock %}

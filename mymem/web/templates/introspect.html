@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Introspect — MyMem{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto space-y-6">
+
+  <div class="flex items-center justify-between">
+    <h1 class="text-xl font-bold text-gray-100">Introspect</h1>
+    <span id="current-date" class="text-sm text-gray-500"></span>
+  </div>
+
+  <!-- Daily summary -->
+  <div class="card">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="section-title">Today's Summary</h2>
+      <button id="refresh-summary" class="text-xs text-indigo-400 hover:text-indigo-300">↻ Refresh</button>
+    </div>
+    <div id="summary-text" class="prose prose-invert prose-sm max-w-none text-gray-300">
+      <div class="text-gray-600 text-sm">Loading…</div>
+    </div>
+  </div>
+
+  <!-- Research suggestion -->
+  <div class="card">
+    <h2 class="section-title mb-4">Research Suggestion</h2>
+    <div class="flex gap-2">
+      <input id="topic-input" type="text" class="input flex-1"
+             placeholder="I'm researching: topic, concept, question…" />
+      <button id="suggest-btn" class="btn-primary px-4">Suggest</button>
+    </div>
+    <div id="suggestions" class="mt-4 space-y-2 hidden"></div>
+  </div>
+
+  <!-- Curiosity trends -->
+  <div class="card">
+    <h2 class="section-title mb-4">Curiosity Trends</h2>
+    <div id="trends-list">
+      {% if interests %}
+        {% set rising = interests | selectattr('weight', 'ge', 2.0) | list %}
+        {% set fading = interests | selectattr('weight', 'lt', 0.5) | list %}
+        {% if rising %}
+        <div class="mb-3">
+          <div class="text-xs text-gray-500 mb-2">Rising ▲</div>
+          <div class="flex flex-wrap gap-2">
+            {% for i in rising %}
+            <span class="px-3 py-1 rounded-full text-xs bg-indigo-950 border border-indigo-700 text-indigo-300">
+              {{ i.domain }}/{{ i.tag }}
+              <span class="text-indigo-500 ml-1">{{ "%.1f"|format(i.weight) }}</span>
+            </span>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+        {% if fading %}
+        <div>
+          <div class="text-xs text-gray-500 mb-2">Fading ▼</div>
+          <div class="flex flex-wrap gap-2">
+            {% for i in fading %}
+            <span class="px-3 py-1 rounded-full text-xs bg-gray-900 border border-gray-700 text-gray-500">
+              {{ i.domain }}/{{ i.tag }}
+            </span>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+        {% if not rising and not fading %}
+        <div class="flex flex-wrap gap-2">
+          {% for i in interests[:10] %}
+          <span class="px-3 py-1 rounded-full text-xs bg-gray-800 border border-gray-700 text-gray-400">
+            {{ i.domain }}/{{ i.tag }}
+          </span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      {% else %}
+        <p class="text-sm text-gray-600">No curiosity data yet — start ingesting and querying!</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Recommendations -->
+  <div id="recs-card" class="card hidden">
+    <h2 class="section-title mb-4">Suggested Reading</h2>
+    <ul id="recs-list" class="space-y-3"></ul>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById('current-date').textContent = new Date().toLocaleDateString('en-US', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+  });
+
+  // Load daily summary
+  function loadSummary() {
+    const el = document.getElementById('summary-text');
+    el.innerHTML = '<div class="text-gray-600 text-sm">Loading…</div>';
+    fetch('/api/introspect')
+      .then(r => r.json())
+      .then(data => {
+        el.innerHTML = marked.parse(data.summary || '_No activity today._');
+        if (data.recommendations?.length) {
+          const card  = document.getElementById('recs-card');
+          const list  = document.getElementById('recs-list');
+          card.classList.remove('hidden');
+          list.innerHTML = data.recommendations.map(r => `
+            <li class="flex items-start gap-3 p-3 rounded-lg bg-gray-900 border border-gray-800">
+              <div class="flex-1 min-w-0">
+                <a href="/wiki/${r.page.toLowerCase().replace(/ /g,'-')}"
+                   class="text-sm font-medium text-indigo-300 hover:text-indigo-200">
+                  [[${r.page}]]
+                </a>
+                <p class="text-xs text-gray-500 mt-0.5">${r.reason}</p>
+              </div>
+              ${r.last_seen ? `<span class="text-xs text-gray-600 shrink-0">${r.last_seen}</span>` : ''}
+            </li>`).join('');
+        }
+      })
+      .catch(() => el.innerHTML = '<span class="text-gray-600">Could not load summary.</span>');
+  }
+
+  loadSummary();
+  document.getElementById('refresh-summary').addEventListener('click', loadSummary);
+
+  // Research suggestion
+  document.getElementById('suggest-btn').addEventListener('click', suggest);
+  document.getElementById('topic-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') suggest();
+  });
+
+  function suggest() {
+    const topic = document.getElementById('topic-input').value.trim();
+    if (!topic) return;
+    const box = document.getElementById('suggestions');
+    box.classList.remove('hidden');
+    box.innerHTML = '<div class="text-gray-600 text-sm">Searching your wiki history…</div>';
+
+    fetch(`/api/introspect?topic=${encodeURIComponent(topic)}`)
+      .then(r => r.json())
+      .then(data => {
+        box.innerHTML = `<div class="prose prose-invert prose-sm max-w-none">${marked.parse(data.summary)}</div>`;
+      })
+      .catch(() => { box.innerHTML = '<span class="text-red-400">Failed to get suggestions.</span>'; });
+  }
+</script>
+{% endblock %}

@@ -1,0 +1,289 @@
+/* MyMem — custom styles (Tailwind handles most; this fills the gaps) */
+
+/* ---- Layout helpers ---- */
+.card {
+  @apply bg-gray-900 border border-gray-800 rounded-xl p-5;
+}
+
+.section-title {
+  @apply text-xs font-semibold uppercase tracking-widest text-gray-400;
+}
+
+/* ---- Form inputs — WCAG AA contrast in dark mode ---- */
+.input {
+  @apply bg-gray-800 border border-gray-600 rounded-lg px-3 py-2
+         text-sm text-gray-100 placeholder-gray-500
+         focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400
+         transition-colors;
+}
+
+/* Native select dark mode fix — browser ignores bg on <select> on some OSes */
+select.input {
+  color-scheme: dark;
+}
+
+.label {
+  @apply text-xs font-medium text-gray-300;
+}
+
+.btn-primary {
+  @apply bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700
+         text-white rounded-lg font-medium text-sm transition-colors
+         focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2
+         focus:ring-offset-gray-900 disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+/* ---- Nav ---- */
+.nav-link {
+  @apply text-gray-300 hover:text-white transition-colors
+         focus:outline-none focus:ring-2 focus:ring-indigo-400 rounded;
+}
+
+/* ---- Domain badges ---- */
+.domain-badge {
+  @apply inline-block px-2 py-0.5 rounded-full text-xs font-medium;
+}
+.domain-tech       { @apply bg-indigo-950 text-indigo-300; }
+.domain-spiritual  { @apply bg-purple-950 text-purple-300; }
+.domain-finance    { @apply bg-emerald-950 text-emerald-300; }
+.domain-health     { @apply bg-pink-950 text-pink-300; }
+.domain-reminder   { @apply bg-orange-950 text-orange-300; }
+.domain-research   { @apply bg-sky-950 text-sky-300; }
+.domain-personal   { @apply bg-yellow-950 text-yellow-300; }
+.domain-creative   { @apply bg-red-950 text-red-300; }
+.domain-business   { @apply bg-green-950 text-green-300; }
+.domain-misc       { @apply bg-gray-800 text-gray-300; }
+
+/* ---- Activity log badges ---- */
+.badge-ingest     { @apply inline-block px-1.5 py-0.5 rounded text-xs bg-indigo-950 text-indigo-300; }
+.badge-query      { @apply inline-block px-1.5 py-0.5 rounded text-xs bg-sky-950 text-sky-300; }
+.badge-lint       { @apply inline-block px-1.5 py-0.5 rounded text-xs bg-orange-950 text-orange-300; }
+.badge-introspect { @apply inline-block px-1.5 py-0.5 rounded text-xs bg-purple-950 text-purple-300; }
+
+/* ---- Citation chips ---- */
+.citation-chip {
+  @apply inline-block px-2 py-0.5 text-xs rounded-full font-mono
+         bg-indigo-950 border border-indigo-700 text-indigo-300
+         hover:border-indigo-400 hover:text-indigo-200 transition-colors
+         focus:outline-none focus:ring-2 focus:ring-indigo-400;
+}
+
+/* ---- Stat rows ---- */
+.stat-row   { @apply flex items-center justify-between text-sm; }
+.stat-label { @apply text-gray-400; }
+.stat-value { @apply font-semibold text-gray-100; }
+
+/* ---- Prose overrides (wiki body) ---- */
+.prose h1, .prose h2, .prose h3 {
+  color: #f3f4f6;
+  scroll-margin-top: 6rem;
+}
+.prose p, .prose li { color: #d1d5db; }
+.prose a { color: #a5b4fc; }
+.prose a:hover { color: #c7d2fe; }
+.prose a:focus { outline: 2px solid #6366f1; outline-offset: 2px; border-radius: 2px; }
+.prose code {
+  background: #1f2937;
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.82em;
+  color: #e5e7eb;
+}
+.prose pre {
+  background: #111827 !important;
+  border: 1px solid #374151;
+}
+
+/* Wikilinks */
+a.wikilink {
+  @apply text-indigo-400 hover:text-indigo-200 no-underline
+         border-b border-indigo-700 hover:border-indigo-400 transition-colors;
+  font-family: inherit;
+}
+a.wikilink:focus {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Broken wikilinks */
+a.wikilink.broken {
+  @apply text-gray-500 border-gray-700 cursor-not-allowed;
+}
+
+/* ---- Typing indicator ---- */
+.typing-dot { animation: pulse 1s infinite; color: #818cf8; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+/* ---- Skip-to-content (screen reader / keyboard) ---- */
+.skip-link {
+  @apply sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2
+         focus:z-50 focus:px-4 focus:py-2 focus:bg-indigo-600 focus:text-white
+         focus:rounded-lg focus:shadow-lg;
+}
+
+/* ---- Light mode overrides ---- */
+html:not(.dark) body {
+  background: #faf9f7;   /* warm off-white */
+  color: #1c1917;        /* stone-900 */
+}
+
+/* prose-invert is hardcoded in templates — override its CSS vars in light mode */
+html:not(.dark) .prose-invert {
+  --tw-prose-body:         #292524;  /* stone-800 */
+  --tw-prose-headings:     #1c1917;  /* stone-900 */
+  --tw-prose-lead:         #44403c;
+  --tw-prose-links:        #4338ca;  /* indigo-700 */
+  --tw-prose-bold:         #1c1917;
+  --tw-prose-counters:     #57534e;  /* stone-600 */
+  --tw-prose-bullets:      #78716c;  /* stone-500 */
+  --tw-prose-hr:           #e7e5e4;
+  --tw-prose-quotes:       #1c1917;
+  --tw-prose-quote-borders:#d6d3d1;
+  --tw-prose-captions:     #78716c;
+  --tw-prose-code:         #1c1917;
+  --tw-prose-pre-code:     #1c1917;
+  --tw-prose-pre-bg:       #f5f5f4;
+  --tw-prose-th-borders:   #d1d5db;
+  --tw-prose-td-borders:   #e7e5e4;
+}
+
+/* Domain filter pills in nav — hardcoded dark classes in template */
+html:not(.dark) .domain-pill {
+  border-color: #a8a29e !important; /* stone-400 */
+  color:        #44403c !important; /* stone-700 */
+}
+html:not(.dark) .domain-pill:hover {
+  border-color: #6366f1 !important;
+  color:        #4338ca !important;
+}
+
+/* Tag chips inside wiki header (bg-gray-800 text-gray-400 hardcoded) */
+html:not(.dark) article span[class*="bg-gray-8"] {
+  background-color: #f5f5f4 !important; /* stone-100 */
+  color:            #44403c !important; /* stone-700 */
+}
+
+/* Card header divider (border-gray-800 hardcoded) */
+html:not(.dark) article .border-b {
+  border-color: #e7e5e4 !important; /* stone-200 */
+}
+
+/* TOC links & backlinks (text-gray-400 hardcoded) */
+html:not(.dark) aside .toc-link,
+html:not(.dark) aside [class*="text-gray-4"] {
+  color: #57534e; /* stone-600 — readable but lighter than body */
+}
+html:not(.dark) aside .toc-link:hover,
+html:not(.dark) aside [class*="text-gray-4"]:hover {
+  color: #4338ca;
+}
+
+/* "No headings / No backlinks" empty state (text-gray-600) */
+html:not(.dark) aside [class*="text-gray-6"] {
+  color: #a8a29e; /* stone-400 */
+}
+
+/* Wiki metadata line (text-gray-600 hardcoded) */
+html:not(.dark) article [class*="text-gray-6"] {
+  color: #78716c; /* stone-500 */
+}
+
+/* Page title in wiki (text-gray-50 hardcoded) */
+html:not(.dark) article h1[class*="text-gray"] {
+  color: #1c1917 !important;
+}
+
+/* Theme toggle button hover in light mode */
+html:not(.dark) #theme-toggle {
+  color: #57534e;
+}
+html:not(.dark) #theme-toggle:hover {
+  color: #1c1917;
+  background-color: #f5f5f4;
+}
+
+/* Nav background — hardcoded bg-gray-950/90 on nav element */
+html:not(.dark) nav {
+  background: rgb(250 249 247 / 0.92) !important;
+  border-color: #e7e5e4 !important;
+}
+
+/* Logo link in light mode */
+html:not(.dark) nav a[href="/"] {
+  color: #4f46e5; /* indigo-700 */
+}
+html:not(.dark) nav a[href="/"]:hover {
+  color: #4338ca;
+}
+html:not(.dark) .card {
+  background: #ffffff;
+  border-color: #e7e5e4; /* stone-200 */
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.06);
+}
+html:not(.dark) .input {
+  @apply bg-white border-stone-300 text-stone-900 placeholder-stone-400;
+}
+html:not(.dark) select.input {
+  color-scheme: light;
+}
+html:not(.dark) .label        { color: #44403c; } /* stone-700 */
+html:not(.dark) .section-title { color: #78716c; } /* stone-500 */
+html:not(.dark) .stat-label   { color: #78716c; } /* stone-500 */
+html:not(.dark) .stat-value   { color: #1c1917; } /* stone-900 */
+html:not(.dark) nav           { background: rgb(250 249 247 / 0.92); border-color: #e7e5e4; }
+html:not(.dark) .nav-link     { color: #44403c; }
+html:not(.dark) .nav-link:hover { color: #1c1917; }
+html:not(.dark) .btn-primary  { @apply focus:ring-offset-white; }
+
+/* Domain badges — lighter tints for light mode */
+html:not(.dark) .domain-tech       { background: #eef2ff; color: #4338ca; }
+html:not(.dark) .domain-spiritual  { background: #faf5ff; color: #7e22ce; }
+html:not(.dark) .domain-finance    { background: #ecfdf5; color: #065f46; }
+html:not(.dark) .domain-health     { background: #fdf2f8; color: #9d174d; }
+html:not(.dark) .domain-reminder   { background: #fff7ed; color: #9a3412; }
+html:not(.dark) .domain-research   { background: #f0f9ff; color: #0369a1; }
+html:not(.dark) .domain-personal   { background: #fefce8; color: #854d0e; }
+html:not(.dark) .domain-creative   { background: #fff1f2; color: #9f1239; }
+html:not(.dark) .domain-business   { background: #f0fdf4; color: #14532d; }
+html:not(.dark) .domain-misc       { background: #f5f5f4; color: #44403c; }
+
+/* Activity badges — light mode */
+html:not(.dark) .badge-ingest     { background: #eef2ff; color: #4338ca; }
+html:not(.dark) .badge-query      { background: #f0f9ff; color: #0369a1; }
+html:not(.dark) .badge-lint       { background: #fff7ed; color: #9a3412; }
+html:not(.dark) .badge-introspect { background: #faf5ff; color: #7e22ce; }
+
+/* Prose — warm, high-contrast body text */
+html:not(.dark) .prose h1,
+html:not(.dark) .prose h2,
+html:not(.dark) .prose h3 { color: #1c1917; }  /* stone-900 */
+html:not(.dark) .prose p,
+html:not(.dark) .prose li { color: #292524; }  /* stone-800 — strong contrast, not harsh */
+html:not(.dark) .prose a  { color: #4338ca; }  /* indigo-700 */
+html:not(.dark) .prose a:hover { color: #3730a3; }
+html:not(.dark) .prose code {
+  background: #f5f5f4;   /* stone-100 */
+  color: #1c1917;
+}
+html:not(.dark) .prose pre {
+  background: #f5f5f4 !important;
+  border-color: #e7e5e4;
+}
+
+/* Wikilinks */
+html:not(.dark) a.wikilink {
+  @apply text-indigo-700 border-indigo-300 hover:text-indigo-900 hover:border-indigo-500;
+}
+html:not(.dark) a.wikilink.broken { color: #a8a29e; border-color: #d6d3d1; } /* stone-400/300 */
+
+/* Citation chips */
+html:not(.dark) .citation-chip {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #4338ca;
+}
+html:not(.dark) .citation-chip:hover {
+  border-color: #6366f1;
+  color: #3730a3;
+}

@@ -1,0 +1,358 @@
+"""
+MyMem CLI — ingest / query / lint / introspect / serve / tags
+
+Entry point: mymem (configured in pyproject.toml → project.scripts)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import sys
+from pathlib import Path
+from typing import Optional
+
+import typer
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.table import Table
+
+app     = typer.Typer(name="mymem", help="Personal LLM-powered knowledge base.", add_completion=False)
+console = Console()
+err     = Console(stderr=True, style="red")
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+def _get_settings():  # type: ignore[return]
+    from mymem.config import get_settings
+    from mymem.observability.logger import configure_logging
+    from pathlib import Path as _Path
+    settings = get_settings()
+    log_file = _Path(settings.observability.log_file) if settings.observability.log_file else None
+    configure_logging(
+        level=settings.observability.log_level,
+        fmt=settings.observability.log_format,
+        log_file=log_file,
+    )
+    return settings
+
+
+def _make_router(settings, llm_fn=None):  # type: ignore[return]
+    from mymem.pipeline.router import router_from_settings
+    return router_from_settings(settings, llm_fn=llm_fn)
+
+
+def _paths(settings):  # type: ignore[return]
+    wiki_dir     = Path(settings.paths.wiki)
+    index_path   = wiki_dir / "index.md"
+    log_path     = wiki_dir / "log.md"
+    curiosity_db = Path("data/curiosity.db")
+    return wiki_dir, index_path, log_path, curiosity_db
+
+
+def _run(coro):  # type: ignore[return]
+    """Run an async coroutine from sync Typer command."""
+    return asyncio.run(coro)
+
+
+# ---------------------------------------------------------------------------
+# mymem ingest
+# ---------------------------------------------------------------------------
+
+@app.command()
+def ingest(
+    source: str = typer.Argument(..., help="File path or URL to ingest"),
+    source_type: str = typer.Option("article", "--type", "-t",
+        help="article | paper | repo | dataset | image | youtube | podcast | tweet | webpage | book | newsletter | note"),
+    tags: str = typer.Option("", "--tags", help="Comma-separated tags"),
+    domain: str = typer.Option("", "--domain", "-d", help="Domain override"),
+) -> None:
+    """Ingest a source document into the wiki."""
+    settings = _get_settings()
+    settings.ensure_dirs()
+    wiki_dir, index_path, log_path, curiosity_db = _paths(settings)
+    router   = _make_router(settings)
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+
+    from mymem.pipeline.ingest import ingest_source
+    from mymem.pipeline.introspect import log_curiosity_event
+    from mymem.wiki.types import TagDomain
+    from mymem.wiki.tags import domain_from_str, normalize_tags
+
+    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as prog:
+        task = prog.add_task(f"Ingesting [cyan]{source}[/]…")
+        result = _run(ingest_source(
+            source,
+            wiki_dir=wiki_dir,
+            index_path=index_path,
+            log_path=log_path,
+            router=router,
+            source_type=source_type,
+            tags=tag_list,
+            domain=domain,
+        ))
+        prog.update(task, completed=True)
+
+    if result.skipped:
+        console.print(Panel(f"[yellow]Skipped:[/] {result.skip_reason}", title="Ingest"))
+        raise typer.Exit(1)
+
+    # Log curiosity events for written pages
+    domain_obj = domain_from_str(domain) if domain else TagDomain.MISC
+    norm_tags  = normalize_tags(tag_list)
+    log_curiosity_event(curiosity_db, "ingest", domain_obj, norm_tags)
+
+    t = Table(show_header=False, box=None, padding=(0, 1))
+    t.add_row("[green]New pages[/]",     ", ".join(result.pages_written) or "—")
+    t.add_row("[blue]Updated pages[/]",  ", ".join(result.pages_updated) or "—")
+    t.add_row("[dim]Chunks used[/]",     str(result.chunk_count))
+    t.add_row("[dim]Session cost[/]",    f"${router.session_cost:.4f}")
+    console.print(Panel(t, title="[bold green]✓ Ingest complete[/]"))
+
+
+# ---------------------------------------------------------------------------
+# mymem query
+# ---------------------------------------------------------------------------
+
+@app.command()
+def query(
+    question: str = typer.Argument(..., help="Question to answer from the wiki"),
+    top_k: int     = typer.Option(5,  "--top-k", "-k", help="Max pages to use as context"),
+    save: bool     = typer.Option(False, "--save", "-s", help="Save answer as wiki page"),
+    domain: str    = typer.Option("", "--domain", "-d", help="Filter to domain"),
+) -> None:
+    """Ask a question — answered from your wiki."""
+    settings = _get_settings()
+    settings.ensure_dirs()
+    wiki_dir, index_path, log_path, curiosity_db = _paths(settings)
+    router   = _make_router(settings)
+
+    from mymem.pipeline.query import query_wiki
+    from mymem.pipeline.introspect import log_curiosity_event
+    from mymem.wiki.types import TagDomain
+    from mymem.wiki.tags import domain_from_str
+
+    domain_obj    = domain_from_str(domain) if domain else None
+    domain_filter = TagDomain(domain) if domain else None
+
+    with Progress(SpinnerColumn(), TextColumn("Searching wiki…"), console=console) as prog:
+        task = prog.add_task("query")
+        result = _run(query_wiki(
+            question,
+            wiki_dir=wiki_dir,
+            index_path=index_path,
+            log_path=log_path,
+            router=router,
+            top_k=top_k,
+            save=save,
+            domain_filter=domain_filter,
+        ))
+        prog.update(task, completed=True)
+
+    # Log curiosity event
+    log_curiosity_event(
+        curiosity_db, "query",
+        domain_obj or TagDomain.MISC, [],
+        query_text=question[:120],
+    )
+
+    console.print()
+    console.print(Markdown(result.answer))
+
+    if result.citations:
+        console.print()
+        console.print("[dim]Sources:[/] " + "  ".join(f"[[{c}]]" for c in result.citations))
+    if result.saved_to:
+        console.print(f"\n[green]Saved →[/] {result.saved_to}")
+    console.print(f"\n[dim]Session cost: ${router.session_cost:.4f}[/]")
+
+
+# ---------------------------------------------------------------------------
+# mymem lint
+# ---------------------------------------------------------------------------
+
+@app.command()
+def lint(
+    as_json: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """Check the wiki for orphans, broken links, and stub pages."""
+    settings = _get_settings()
+    wiki_dir = Path(settings.paths.wiki)
+
+    from mymem.pipeline.lint import lint_wiki, format_lint_report, IssueKind
+
+    issues = lint_wiki(wiki_dir)
+
+    if as_json:
+        typer.echo(json.dumps([
+            {"kind": i.kind.value, "page": i.page_title, "detail": i.detail}
+            for i in issues
+        ], indent=2))
+        return
+
+    if not issues:
+        console.print("[green]✓ Wiki is clean — no issues found.[/]")
+        return
+
+    table = Table(title=f"Lint Issues ({len(issues)})", show_lines=True)
+    table.add_column("Kind",  style="yellow", width=12)
+    table.add_column("Page",  style="cyan")
+    table.add_column("Detail")
+
+    color = {IssueKind.ORPHAN: "yellow", IssueKind.BROKEN_LINK: "red", IssueKind.STUB: "dim"}
+    for issue in issues:
+        table.add_row(
+            f"[{color[issue.kind]}]{issue.kind.value}[/]",
+            issue.page_title,
+            issue.detail,
+        )
+    console.print(table)
+    raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# mymem introspect
+# ---------------------------------------------------------------------------
+
+@app.command()
+def introspect(
+    topic: str  = typer.Option("", "--topic", "-t", help="Research suggestion mode"),
+    date_str: str = typer.Option("", "--date",  help="Summarise a past date (YYYY-MM-DD)"),
+    no_save: bool = typer.Option(False, "--no-save", help="Don't write daily page"),
+) -> None:
+    """Daily summary + curiosity-driven reading suggestions."""
+    from datetime import date as dateclass
+    settings = _get_settings()
+    settings.ensure_dirs()
+    wiki_dir, index_path, log_path, curiosity_db = _paths(settings)
+    router   = _make_router(settings)
+
+    from mymem.pipeline.introspect import introspect as run_introspect
+
+    target_date = None
+    if date_str:
+        try:
+            target_date = dateclass.fromisoformat(date_str)
+        except ValueError:
+            err.print(f"Invalid date: {date_str!r}. Use YYYY-MM-DD.")
+            raise typer.Exit(1)
+
+    with Progress(SpinnerColumn(), TextColumn("Generating summary…"), console=console) as prog:
+        task = prog.add_task("introspect")
+        result = _run(run_introspect(
+            wiki_dir=wiki_dir,
+            index_path=index_path,
+            log_path=log_path,
+            curiosity_db=curiosity_db,
+            router=router,
+            target_date=target_date,
+            topic=topic or None,
+            save=not no_save and not topic,
+        ))
+        prog.update(task, completed=True)
+
+    console.print()
+    console.print(Panel(
+        Markdown(result.summary),
+        title=f"[bold]Introspect — {result.target_date}[/]",
+    ))
+
+    if result.recommendations:
+        console.print("\n[bold]Suggested Reading[/]")
+        for rec in result.recommendations:
+            console.print(f"  • [cyan][[{rec.page_title}]][/] — {rec.reason}")
+
+    if result.top_interests:
+        rising = [i for i in result.top_interests if float(i["weight"]) >= 2.0]
+        fading = [i for i in result.top_interests if float(i["weight"]) < 0.5]
+        if rising:
+            console.print("\n[bold]Rising ▲[/] " +
+                "  ".join(f"[indigo]{i['domain']}/{i['tag']}[/]" for i in rising[:5]))
+        if fading:
+            console.print("[bold]Fading ▼[/] " +
+                "  ".join(f"[dim]{i['domain']}/{i['tag']}[/]" for i in fading[:5]))
+
+    if result.saved_to:
+        console.print(f"\n[dim]Saved → {result.saved_to}[/]")
+
+
+# ---------------------------------------------------------------------------
+# mymem tags
+# ---------------------------------------------------------------------------
+
+@app.command()
+def tags() -> None:
+    """List all domains and tag frequencies from curiosity history."""
+    settings     = _get_settings()
+    _, _, _, curiosity_db = _paths(settings)
+
+    from mymem.pipeline.introspect import top_interests
+    interests = top_interests(curiosity_db, limit=50)
+
+    if not interests:
+        console.print("[dim]No curiosity data yet. Ingest some sources first.[/]")
+        return
+
+    table = Table(title="Tag Interests", show_lines=False)
+    table.add_column("Domain", style="cyan", width=12)
+    table.add_column("Tag",    style="green")
+    table.add_column("Weight", justify="right")
+    table.add_column("Trend",  width=8)
+
+    for i in interests:
+        w     = float(i["weight"])
+        trend = "▲ rising" if w >= 2.0 else ("▼ fading" if w < 0.5 else "  stable")
+        color = "green" if w >= 2.0 else ("dim" if w < 0.5 else "yellow")
+        table.add_row(str(i["domain"]), str(i["tag"]), f"{w:.2f}", f"[{color}]{trend}[/]")
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# mymem serve
+# ---------------------------------------------------------------------------
+
+@app.command()
+def serve(
+    port: int  = typer.Option(7860, "--port", "-p", help="Port to listen on"),
+    host: str  = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open browser on start"),
+) -> None:
+    """Start the web UI."""
+    try:
+        import uvicorn
+    except ImportError:
+        err.print("uvicorn not installed. Run: pip install uvicorn")
+        raise typer.Exit(1)
+
+    url = f"http://{host}:{port}"
+    console.print(f"[bold green]MyMem[/] web UI → [link={url}]{url}[/link]")
+
+    if open_browser:
+        import threading, webbrowser
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+
+    uvicorn.run(
+        "mymem.web.app:app",
+        host=host,
+        port=port,
+        reload=False,
+        log_level="warning",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    app()
+
+
+if __name__ == "__main__":
+    main()

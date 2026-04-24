@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Knowledge Graph — MyMem{% endblock %}
+
+{% block content %}
+<div class="card" style="height: calc(100vh - 8rem);">
+  <div class="flex items-center justify-between mb-3">
+    <h1 class="text-lg font-semibold text-gray-100">Knowledge Graph</h1>
+    <div class="flex items-center gap-3">
+      <input id="graph-filter" type="text" placeholder="Filter nodes…" class="input text-sm w-40" />
+      <select id="domain-filter-graph" class="text-sm bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-300">
+        <option value="">All domains</option>
+        {% for d in ['tech','spiritual','finance','health','reminder','research','personal','creative','business'] %}
+        <option value="{{ d }}">{{ d }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+  <svg id="graph-svg" class="w-full" style="height: calc(100% - 3rem); background: #0a0a0f; border-radius: 0.5rem;"></svg>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const DOMAIN_COLORS = {
+  tech: '#6366f1', spiritual: '#a78bfa', finance: '#34d399',
+  health: '#f472b6', reminder: '#fb923c', research: '#38bdf8',
+  personal: '#facc15', creative: '#f87171', business: '#4ade80', misc: '#6b7280',
+};
+
+fetch('/api/graph').then(r => r.json()).then(({ nodes, edges }) => {
+  let filteredNodes = nodes;
+  let filteredEdges = edges;
+
+  const svg = d3.select('#graph-svg');
+  const W   = svg.node().clientWidth;
+  const H   = svg.node().clientHeight;
+
+  // Zoom
+  const g = svg.append('g');
+  svg.call(d3.zoom().scaleExtent([0.2, 4]).on('zoom', e => g.attr('transform', e.transform)));
+
+  // Arrow marker
+  svg.append('defs').append('marker')
+    .attr('id', 'arrow').attr('viewBox', '0 -5 10 10')
+    .attr('refX', 18).attr('markerWidth', 6).attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', '#374151');
+
+  let simulation, linkSel, nodeSel, labelSel;
+
+  function draw(ns, es) {
+    g.selectAll('*').remove();
+
+    simulation = d3.forceSimulation(ns)
+      .force('link', d3.forceLink(es).id(d => d.id).distance(80))
+      .force('charge', d3.forceManyBody().strength(-200))
+      .force('center', d3.forceCenter(W / 2, H / 2))
+      .force('collision', d3.forceCollide(20));
+
+    linkSel = g.append('g').selectAll('line')
+      .data(es).join('line')
+      .attr('stroke', '#1f2937').attr('stroke-width', 1.5)
+      .attr('marker-end', 'url(#arrow)');
+
+    nodeSel = g.append('g').selectAll('circle')
+      .data(ns).join('circle')
+      .attr('r', 8)
+      .attr('fill', d => DOMAIN_COLORS[d.domain] || '#6b7280')
+      .attr('stroke', '#111827').attr('stroke-width', 2)
+      .attr('cursor', 'pointer')
+      .call(d3.drag()
+        .on('start', (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+        .on('drag',  (e, d) => { d.fx = e.x; d.fy = e.y; })
+        .on('end',   (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
+      )
+      .on('click', (_, d) => window.location = '/wiki/' + d.slug)
+      .on('mouseover', function() { d3.select(this).attr('r', 11); })
+      .on('mouseout',  function() { d3.select(this).attr('r', 8); });
+
+    nodeSel.append('title').text(d => d.id);
+
+    labelSel = g.append('g').selectAll('text')
+      .data(ns).join('text')
+      .text(d => d.id.length > 20 ? d.id.slice(0, 18) + '…' : d.id)
+      .attr('font-size', 10).attr('fill', '#9ca3af')
+      .attr('text-anchor', 'middle').attr('dy', 20)
+      .attr('pointer-events', 'none');
+
+    simulation.on('tick', () => {
+      linkSel.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+             .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+      nodeSel.attr('cx', d => d.x).attr('cy', d => d.y);
+      labelSel.attr('x', d => d.x).attr('y', d => d.y);
+    });
+  }
+
+  draw(nodes, edges);
+
+  // Filter by text
+  document.getElementById('graph-filter').addEventListener('input', function() {
+    const q = this.value.toLowerCase();
+    const domain = document.getElementById('domain-filter-graph').value;
+    applyFilters(q, domain);
+  });
+
+  document.getElementById('domain-filter-graph').addEventListener('change', function() {
+    const q = document.getElementById('graph-filter').value.toLowerCase();
+    applyFilters(q, this.value);
+  });
+
+  function applyFilters(q, domain) {
+    const ns = nodes.filter(n =>
+      (!q || n.id.toLowerCase().includes(q)) &&
+      (!domain || n.domain === domain)
+    );
+    const ids = new Set(ns.map(n => n.id));
+    const es  = edges.filter(e => ids.has(e.source.id || e.source) && ids.has(e.target.id || e.target));
+    draw(ns, es);
+  }
+});
+</script>
+{% endblock %}

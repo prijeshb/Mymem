@@ -1,0 +1,36 @@
+services:
+  mymem:
+    build: .
+    image: mymem:latest
+    ports:
+      - "7860:7860"
+    volumes:
+      # Persistent user data — never overwritten by image updates
+      - ./data:/app/data
+      - ./wiki:/app/wiki
+      - ./raw:/app/raw
+      # Mount your config.yaml to change models/provider at runtime
+      - ./config.yaml:/app/config.yaml:ro
+    env_file:
+      - .env
+    restart: unless-stopped
+    # When using --profile ollama, add OLLAMA_HOST=http://ollama:11434 to your .env
+
+  # ── Optional local Ollama ────────────────────────────────────────────────────
+  # Start with:  docker compose --profile ollama up
+  # Then add to .env:  OLLAMA_HOST=http://ollama:11434
+  # Pull a model: docker exec mymem-ollama-1 ollama pull gemma3:4b
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: "24h"
+    profiles:
+      - ollama
+    restart: unless-stopped
+
+volumes:
+  ollama_models:
