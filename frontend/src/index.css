@@ -237,3 +237,15 @@ h1, h2, h3, h4, h5, h6 {
 /* ── Typing indicator ────────────────────────────────────────────────────────── */
 @keyframes pulse-opacity { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }
 .typing-dot { animation: pulse-opacity 1s infinite; color: #2563EB; }
+
+/* ── Loading word (Claude-style rotating microcopy) ─────────────────────────── */
+.loading-word {
+  opacity: 0;
+  transform: translateY(5px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  letter-spacing: 0.01em;
+}
+.loading-word--in {
+  opacity: 1;
+  transform: translateY(0);
+}
