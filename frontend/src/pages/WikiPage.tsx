@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { useMatch } from 'react-router-dom';
+import { useMatch, useNavigate } from 'react-router-dom';
 import { marked } from 'marked';
-import { fetchPage, fetchPages, patchPage, streamRelatedWeb, titleToSlug } from '../lib/api';
+import { archivePage, deletePage, fetchPage, fetchPages, patchPage, restorePage, streamRelatedWeb, titleToSlug } from '../lib/api';
 import type { Domain, RelatedConcept, WikiPageData } from '../lib/types';
 import { ALL_DOMAINS } from '../lib/types';
 import { DomainBadge } from '../components/DomainBadge';
@@ -19,8 +19,10 @@ function renderBody(body: string): string {
 }
 
 export function WikiPage() {
-  const match = useMatch('/wiki/*');
-  const slug  = match?.params['*'] ?? '';
+  const match    = useMatch('/wiki/*');
+  const slug     = match?.params['*'] ?? '';
+  const navigate = useNavigate();
+
   const [page, setPage]             = useState<WikiPageData | null>(null);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState<string | null>(null);
@@ -36,6 +38,13 @@ export function WikiPage() {
   const [editDomain, setEditDomain] = useState<Domain>('misc');
   const [saving, setSaving]         = useState(false);
   const [saveError, setSaveError]   = useState<string | null>(null);
+
+  const [menuOpen, setMenuOpen]           = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting]           = useState(false);
+  const [archiving, setArchiving]         = useState(false);
+  const [actionError, setActionError]     = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!slug) return;
@@ -56,7 +65,7 @@ export function WikiPage() {
         setRelatedLoading(true);
         (async () => {
           try {
-            for await (const ev of streamRelatedWeb(seed.map(r => r.title))) {
+            for await (const ev of streamRelatedWeb(seed.map(r => r.title), slug)) {
               if ('done' in ev) break;
               setRelated(prev => prev.map(r =>
                 r.slug === ev.slug ? { ...r, web_links: ev.web_links } : r,
@@ -137,6 +146,60 @@ export function WikiPage() {
     }
   }
 
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node))
+        setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [menuOpen]);
+
+  async function handleArchive() {
+    if (!slug) return;
+    setArchiving(true);
+    setActionError(null);
+    setMenuOpen(false);
+    try {
+      await archivePage(slug);
+      setPage(p => p ? { ...p, archived: true } : p);
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setArchiving(false);
+    }
+  }
+
+  async function handleRestore() {
+    if (!slug) return;
+    setArchiving(true);
+    setActionError(null);
+    setMenuOpen(false);
+    try {
+      await restorePage(slug);
+      setPage(p => p ? { ...p, archived: false } : p);
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setArchiving(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!slug) return;
+    setDeleting(true);
+    setActionError(null);
+    try {
+      await deletePage(slug);
+      navigate('/');
+    } catch (e) {
+      setActionError(String(e));
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
+  }
+
   if (loading) return <div className="flex justify-center py-12"><LoadingSpinner /></div>;
   if (error)   return <div className="max-w-2xl mx-auto py-8"><ErrorBanner message={error} /></div>;
   if (!page)   return null;
@@ -162,7 +225,76 @@ export function WikiPage() {
             <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 leading-tight flex-1">
               {page.title}
             </h1>
+            {page.archived && (
+              <span className="px-2 py-0.5 rounded-full text-xs font-medium
+                               bg-amber-100 text-amber-700
+                               dark:bg-amber-900/40 dark:text-amber-400">
+                Archived
+              </span>
+            )}
             <DomainBadge domain={page.domain} />
+
+            {/* ⋮ Actions dropdown */}
+            <div ref={menuRef} className="relative">
+              <button
+                onClick={() => { setMenuOpen(o => !o); setConfirmDelete(false); setActionError(null); }}
+                disabled={archiving || deleting}
+                aria-label="Page actions"
+                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 dark:hover:text-gray-300
+                           hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-40"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <circle cx="8" cy="2.5" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="8" cy="13.5" r="1.5"/>
+                </svg>
+              </button>
+
+              {menuOpen && !confirmDelete && (
+                <div className="absolute right-0 top-9 z-50 w-44
+                                bg-white dark:bg-gray-900
+                                border border-gray-200 dark:border-gray-700
+                                rounded-xl shadow-lg py-1 text-sm">
+                  {page.archived ? (
+                    <>
+                      <button
+                        onClick={handleRestore}
+                        className="w-full text-left px-4 py-2
+                                   text-gray-700 dark:text-gray-300
+                                   hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                      >
+                        Restore
+                      </button>
+                      <button
+                        onClick={() => { setMenuOpen(false); setConfirmDelete(true); }}
+                        className="w-full text-left px-4 py-2
+                                   text-red-600 dark:text-red-400
+                                   hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                      >
+                        Delete permanently
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={handleArchive}
+                        className="w-full text-left px-4 py-2
+                                   text-gray-700 dark:text-gray-300
+                                   hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                      >
+                        Archive
+                      </button>
+                      <button
+                        onClick={() => { setMenuOpen(false); setConfirmDelete(true); }}
+                        className="w-full text-left px-4 py-2
+                                   text-red-600 dark:text-red-400
+                                   hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                      >
+                        Delete
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {editing ? (
@@ -233,6 +365,34 @@ export function WikiPage() {
             Created {page.created} · Updated {page.updated}
             {page.sources.length > 0 && ` · Sources: ${page.sources.join(', ')}`}
           </p>
+
+          {actionError && <p className="text-xs text-red-500 mt-1">{actionError}</p>}
+          {confirmDelete && (
+            <div className="flex items-center gap-2 mt-2">
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                {page.archived ? 'Delete permanently?' : 'Delete this page?'}
+              </span>
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                className="px-3 py-1 text-xs font-medium rounded-lg
+                           bg-red-600 hover:bg-red-700 text-white
+                           disabled:opacity-50 transition-colors"
+              >
+                {deleting ? 'Deleting…' : 'Confirm'}
+              </button>
+              <button
+                onClick={() => setConfirmDelete(false)}
+                disabled={deleting}
+                className="px-3 py-1 text-xs font-medium rounded-lg
+                           bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300
+                           hover:bg-gray-200 dark:hover:bg-gray-700
+                           disabled:opacity-50 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Article body */}

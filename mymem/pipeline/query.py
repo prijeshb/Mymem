@@ -43,9 +43,10 @@ class QueryResult:
 # ---------------------------------------------------------------------------
 
 _QA_SYSTEM = """\
-You are a research assistant with access to a personal wiki. Answer the question
-using ONLY the provided wiki pages. Cite your sources using [[Page Title]] format.
-If the wiki does not contain enough information, say so clearly.
+You are a research assistant with access to a personal wiki and indexed PDF documents.
+Answer the question using ONLY the provided context.
+Cite wiki sources as [[Page Title]] and PDF sources as [PDF: filename p.N].
+If the context does not contain enough information, say so clearly.
 Be concise and direct. Use markdown formatting in your answer.
 """
 
@@ -56,7 +57,7 @@ def _qa_prompt(question: str, pages_content: list[tuple[str, str]]) -> str:
         for title, body in pages_content
     ]
     context = "\n\n".join(context_parts)
-    return f"Question: {question}\n\nWiki pages:\n\n{context}"
+    return f"Question: {question}\n\nContext:\n\n{context}"
 
 
 # ---------------------------------------------------------------------------
@@ -73,9 +74,11 @@ async def query_wiki(
     top_k: int = 5,
     save: bool = False,
     domain_filter: TagDomain | None = None,
+    rag_db_path: Path | None = None,
+    rag_top_k: int = 5,
 ) -> QueryResult:
     """
-    Answer a question using the wiki.
+    Answer a question using the wiki and (optionally) RAG PDF chunks.
 
     Args:
         question:      The user's question.
@@ -83,9 +86,11 @@ async def query_wiki(
         index_path:    Path to index.md.
         log_path:      Path to log.md.
         router:        ModelRouter instance.
-        top_k:         Maximum number of wiki pages to include as context.
+        top_k:         Maximum wiki pages to include as context.
         save:          If True, save the answer as a new wiki page.
-        domain_filter: Optional domain to restrict search.
+        domain_filter: Optional domain to restrict wiki search.
+        rag_db_path:   Path to the RAG SQLite database; None skips vector search.
+        rag_top_k:     Max PDF chunks to include alongside wiki pages.
     """
     run_id = set_run_id()
     log.info("Query started", question=question[:80], top_k=top_k,
@@ -118,6 +123,15 @@ async def query_wiki(
         except FileNotFoundError:
             log.warning("Index entry missing on disk", title=entry.title, path=str(page_path))
             continue
+
+    # 2b. RAG vector search — append PDF chunks to context
+    if rag_db_path and rag_db_path.exists():
+        rag_chunks = await _fetch_rag_context(question, db_path=rag_db_path, top_k=rag_top_k)
+        for label, body in rag_chunks:
+            pages_content.append((label, body))
+            citations.append(label)
+        if rag_chunks:
+            log.info("RAG chunks merged", count=len(rag_chunks))
 
     # 3. Synthesize answer
     if pages_content:
@@ -171,3 +185,39 @@ async def query_wiki(
     log.info("Query complete", citations=len(citations),
              saved=bool(result.saved_to), cost=f"${router.session_cost:.4f}")
     return result
+
+
+# ---------------------------------------------------------------------------
+# RAG helpers
+# ---------------------------------------------------------------------------
+
+async def _fetch_rag_context(
+    question: str,
+    *,
+    db_path: Path,
+    top_k: int,
+) -> list[tuple[str, str]]:
+    """Embed the query and retrieve top-k PDF chunks from the RAG store.
+
+    Returns a list of (label, text) pairs where label is
+    `[PDF: filename p.N]` — ready to be spliced into the LLM context.
+    Never raises; returns empty list on any failure.
+    """
+    try:
+        from mymem.config import get_settings
+        from mymem.rag.embedder import embed_query
+        from mymem.rag.store import search_similar
+
+        settings = get_settings()
+        query_vec = await embed_query(question, base_url=settings.ollama.base_url)
+        results = search_similar(db_path, query_vec, top_k=top_k)
+        context: list[tuple[str, str]] = []
+        for r in results:
+            filename = Path(r.chunk.source_path).name
+            page_label = f"p.{r.chunk.page_num}" if r.chunk.page_num else "p.?"
+            label = f"[PDF: {filename} {page_label}]"
+            context.append((label, r.chunk.text))
+        return context
+    except Exception as exc:
+        log.warning("RAG context fetch failed", error=str(exc))
+        return []

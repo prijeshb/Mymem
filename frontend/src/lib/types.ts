@@ -147,9 +147,18 @@ export interface WikiPageData {
   created: string;
   updated: string;
   slug: string;
+  archived: boolean;
   backlinks: Array<{ title: string; slug: string }>;
   toc: Array<{ level: number; text: string; id: string }>;
   related: RelatedConcept[] | undefined;
+}
+
+export interface ArchivedPage {
+  title: string;
+  slug: string;
+  domain: Domain;
+  tags: string[];
+  updated: string;
 }
 
 export interface LogEntry {

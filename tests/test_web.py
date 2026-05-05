@@ -623,3 +623,150 @@ class TestApiPageRelated:
         )
         r = client.get("/api/page/plain")
         assert r.json()["related"] == []
+
+
+# ---------------------------------------------------------------------------
+# GET /api/rag/sources
+# ---------------------------------------------------------------------------
+
+class TestApiRagSources:
+    def test_returns_empty_when_db_missing(self, client: TestClient, tmp_path: Path) -> None:
+        client.app.state.rag_db_path = tmp_path / "rag_does_not_exist.db"
+        r = client.get("/api/rag/sources")
+        assert r.status_code == 200
+        assert r.json() == {"sources": []}
+
+    def test_returns_sources_when_db_has_data(self, client: TestClient, tmp_path: Path) -> None:
+        from mymem.rag.store import init_db, insert_chunks
+
+        rag_db = tmp_path / "rag.db"
+        init_db(rag_db)
+        chunks = [
+            {
+                "source_path": "raw/paper.pdf",
+                "source_slug": "paper",
+                "chunk_index": i,
+                "page_num": i + 1,
+                "text": f"Chunk {i} text here.",
+            }
+            for i in range(3)
+        ]
+        insert_chunks(rag_db, chunks, [[0.0] * 768] * 3)
+
+        client.app.state.rag_db_path = rag_db
+        r = client.get("/api/rag/sources")
+        assert r.status_code == 200
+        data = r.json()
+        assert len(data["sources"]) == 1
+        assert data["sources"][0]["source_path"] == "raw/paper.pdf"
+        assert data["sources"][0]["chunk_count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/page/{slug}
+# ---------------------------------------------------------------------------
+
+class TestApiPageDelete:
+    _PAGE = (
+        "---\ntitle: Delete Me\ndomain: tech\ntags: []\nsources: []\n"
+        "created: 2026-01-01\nupdated: 2026-01-01\n---\n\n# Delete Me\n\nContent.\n"
+    )
+
+    def test_delete_removes_file(self, client: TestClient, wiki_dir: Path) -> None:
+        p = wiki_dir / "delete-me.md"
+        p.write_text(self._PAGE, encoding="utf-8")
+        r = client.delete("/api/page/delete-me")
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        assert not p.exists()
+
+    def test_delete_missing_page_returns_404(self, client: TestClient) -> None:
+        r = client.delete("/api/page/ghost-page")
+        assert r.status_code == 404
+
+    def test_delete_returns_slug(self, client: TestClient, wiki_dir: Path) -> None:
+        p = wiki_dir / "delete-me.md"
+        p.write_text(self._PAGE, encoding="utf-8")
+        r = client.delete("/api/page/delete-me")
+        assert r.json()["deleted"] == "delete-me"
+
+
+# ---------------------------------------------------------------------------
+# POST /api/page/{slug}/archive  &  /restore
+# ---------------------------------------------------------------------------
+
+class TestApiPageArchiveRestore:
+    _PAGE = (
+        "---\ntitle: Archive Me\ndomain: tech\ntags: []\nsources: []\n"
+        "created: 2026-01-01\nupdated: 2026-01-01\n---\n\n# Archive Me\n\nContent.\n"
+    )
+    _ARCHIVED_PAGE = (
+        "---\ntitle: Archive Me\ndomain: tech\ntags: []\nsources: []\n"
+        "archived: true\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\n# Archive Me\n\nContent.\n"
+    )
+
+    def test_archive_sets_archived_flag(self, client: TestClient, wiki_dir: Path) -> None:
+        (wiki_dir / "archive-me.md").write_text(self._PAGE, encoding="utf-8")
+        r = client.post("/api/page/archive-me/archive")
+        assert r.status_code == 200
+        assert r.json()["archived"] is True
+        content = (wiki_dir / "archive-me.md").read_text()
+        assert "archived: true" in content
+
+    def test_archive_missing_page_returns_404(self, client: TestClient) -> None:
+        r = client.post("/api/page/no-such-page/archive")
+        assert r.status_code == 404
+
+    def test_archive_already_archived_is_idempotent(self, client: TestClient, wiki_dir: Path) -> None:
+        (wiki_dir / "archive-me.md").write_text(self._ARCHIVED_PAGE, encoding="utf-8")
+        r = client.post("/api/page/archive-me/archive")
+        assert r.status_code == 200
+        assert r.json()["archived"] is True
+
+    def test_restore_clears_archived_flag(self, client: TestClient, wiki_dir: Path) -> None:
+        (wiki_dir / "archive-me.md").write_text(self._ARCHIVED_PAGE, encoding="utf-8")
+        r = client.post("/api/page/archive-me/restore")
+        assert r.status_code == 200
+        assert r.json()["archived"] is False
+        content = (wiki_dir / "archive-me.md").read_text()
+        assert "archived: true" not in content
+
+    def test_restore_missing_page_returns_404(self, client: TestClient) -> None:
+        r = client.post("/api/page/ghost/restore")
+        assert r.status_code == 404
+
+    def test_restore_already_active_is_idempotent(self, client: TestClient, wiki_dir: Path) -> None:
+        (wiki_dir / "archive-me.md").write_text(self._PAGE, encoding="utf-8")
+        r = client.post("/api/page/archive-me/restore")
+        assert r.status_code == 200
+        assert r.json()["archived"] is False
+
+
+# ---------------------------------------------------------------------------
+# GET /api/archived
+# ---------------------------------------------------------------------------
+
+class TestApiArchived:
+    _ACTIVE_PAGE = (
+        "---\ntitle: Active Page\ndomain: tech\ntags: []\nsources: []\n"
+        "created: 2026-01-01\nupdated: 2026-01-01\n---\n\n# Active Page\n\nContent.\n"
+    )
+    _ARCHIVED_PAGE = (
+        "---\ntitle: Archived Page\ndomain: tech\ntags: []\nsources: []\n"
+        "archived: true\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\n# Archived Page\n\nContent.\n"
+    )
+
+    def test_returns_only_archived_pages(self, client: TestClient, wiki_dir: Path) -> None:
+        (wiki_dir / "active-page.md").write_text(self._ACTIVE_PAGE, encoding="utf-8")
+        (wiki_dir / "archived-page.md").write_text(self._ARCHIVED_PAGE, encoding="utf-8")
+        r = client.get("/api/archived")
+        assert r.status_code == 200
+        pages = r.json()   # returns a plain list
+        titles = [p["title"] for p in pages]
+        assert "Archived Page" in titles
+        assert "Active Page" not in titles
+
+    def test_returns_empty_when_none_archived(self, client: TestClient, wiki_dir: Path) -> None:
+        (wiki_dir / "active-page.md").write_text(self._ACTIVE_PAGE, encoding="utf-8")
+        r = client.get("/api/archived")
+        assert r.json() == []

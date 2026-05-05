@@ -324,25 +324,31 @@ Relationship types: `is-a`, `part-of`, `related-to`, `contradicts`, `supports`, 
 | `mymem/config.py` | DONE |
 | `mymem/observability/` | DONE + tested |
 | `mymem/security/` | DONE + tested |
-| `mymem/wiki/types.py` | DONE |
+| `mymem/wiki/types.py` | DONE — includes canonical `slugify()` and `archived` field |
 | `mymem/wiki/tags.py` | DONE |
-| `mymem/wiki/page.py` | DONE |
+| `mymem/wiki/page.py` | DONE — includes `list_archived_pages()` |
 | `mymem/wiki/index.py` | DONE |
 | `mymem/wiki/log.py` | DONE |
 | `mymem/pipeline/llm.py` | DONE |
 | `mymem/pipeline/router.py` | DONE |
 | `mymem/pipeline/splitter.py` | DONE |
-| `mymem/pipeline/ingest.py` | DONE |
-| `mymem/pipeline/query.py` | DONE |
+| `mymem/pipeline/search.py` | DONE — DDG + Wikipedia fallback + TF-IDF Phase 2 |
+| `mymem/pipeline/ingest.py` | DONE — auto RAG-indexes local PDFs after wiki generation |
+| `mymem/pipeline/query.py` | DONE — hybrid wiki + RAG vector retrieval |
 | `mymem/pipeline/lint.py` | DONE |
 | `mymem/pipeline/introspect.py` | DONE |
 | `mymem/cli.py` | DONE |
-| `mymem/web/routes/api.py` | DONE — all JSON endpoints |
+| `mymem/rag/store.py` | DONE — sqlite-vec chunk store (100% tested) |
+| `mymem/rag/pdf_parser.py` | DONE — pypdf extraction + sliding-window chunking (100% tested) |
+| `mymem/rag/embedder.py` | DONE — Ollama nomic-embed-text, 768-dim (96% tested) |
+| `mymem/rag/ingest.py` | DONE — orchestrates parse → embed → store (100% tested) |
+| `mymem/web/routes/api.py` | DONE — all JSON endpoints incl. delete/archive/restore/rag |
 | `mymem/web/app.py` | DONE — serves SPA or Jinja2 fallback |
 | `mymem/web/routes/pages.py` | LEGACY — Jinja2 fallback only |
 | `mymem/web/templates/` | LEGACY — replaced by React SPA |
 | `frontend/` | DONE — React + TypeScript SPA, built to `frontend/dist/` |
 | `data/curiosity.db` | DONE — schema created on first run |
+| `data/rag.db` | DONE — created on first PDF ingest (sqlite-vec virtual table) |
 
 ## Tag Taxonomy
 

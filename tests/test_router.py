@@ -73,15 +73,15 @@ class TestEstimateCost:
 class TestModelRouter:
     def test_default_task_models(self):
         router = ModelRouter()
-        assert router.model_for("compile") == "gemma4:12b"
-        assert router.model_for("qa") == "gemma3:12b"
-        assert router.model_for("lint") == "gemma3:4b"
+        assert router.model_for("compile") == "gemma4:31b-cloud"
+        assert router.model_for("qa") == "gemma4:31b-cloud"
+        assert router.model_for("lint") == "gemma4:31b-cloud"
 
     def test_task_model_override(self):
         router = ModelRouter(task_models={"compile": "claude-sonnet-4-6"})
         assert router.model_for("compile") == "claude-sonnet-4-6"
         # Other tasks unaffected
-        assert router.model_for("qa") == "gemma3:12b"
+        assert router.model_for("qa") == "gemma4:31b-cloud"
 
     def test_unknown_task_fallback(self):
         router = ModelRouter()

@@ -59,6 +59,8 @@ def _render_frontmatter(page: WikiPage) -> str:
         "created": page.created.isoformat(),
         "updated": page.updated.isoformat(),
     }
+    if page.archived:
+        fm["archived"] = True
     fm_str = yaml.dump(fm, default_flow_style=False, allow_unicode=True, sort_keys=True)
     return f"---\n{fm_str}---\n\n{page.body}"
 
@@ -96,6 +98,7 @@ def read_page(path: Path) -> WikiPage:
         domain=domain_from_str(str(fm.get("domain", "misc"))),
         created=_parse_date(fm.get("created")),
         updated=_parse_date(fm.get("updated")),
+        archived=bool(fm.get("archived", False)),
     )
 
 
@@ -112,12 +115,12 @@ def write_page(page: WikiPage) -> None:
     page.path.write_text(content, encoding="utf-8")
 
 
-def list_pages(wiki_dir: Path) -> list[WikiPage]:
+def list_pages(wiki_dir: Path, include_archived: bool = False) -> list[WikiPage]:
     """
     Return all wiki pages in wiki_dir (non-recursive, top-level only).
 
     Skips index.md, log.md, and any files starting with '.'.
-    Returns an empty list if the directory is empty or doesn't exist.
+    Archived pages are excluded unless include_archived=True.
     """
     if not wiki_dir.exists():
         return []
@@ -129,19 +132,22 @@ def list_pages(wiki_dir: Path) -> list[WikiPage]:
         if md_file.name.startswith(".") or md_file.name in skip:
             continue
         try:
-            pages.append(read_page(md_file))
+            page = read_page(md_file)
+            if page.archived and not include_archived:
+                continue
+            pages.append(page)
         except Exception:
-            # Corrupt or unreadable page — skip silently, let lint catch it
             continue
 
     return pages
 
 
+def list_archived_pages(wiki_dir: Path) -> list[WikiPage]:
+    """Return only archived wiki pages."""
+    return [p for p in list_pages(wiki_dir, include_archived=True) if p.archived]
+
+
 def slug_to_path(wiki_dir: Path, title: str) -> Path:
     """Derive the expected file path for a page with the given title."""
-    import re
-    slug = title.lower().replace(" ", "-")
-    # Strip any characters that could cause path traversal
-    slug = re.sub(r"[^a-z0-9\-]", "", slug)
-    slug = slug[:120] or "untitled"
-    return wiki_dir / f"{slug}.md"
+    from mymem.wiki.types import slugify
+    return wiki_dir / f"{slugify(title)}.md"

@@ -15,11 +15,11 @@ models:
   compile:       gemma4:31b-cloud   # raw → wiki article
   merge:         gemma4:31b-cloud   # merge compiled chunks
   qa:            gemma4:31b-cloud   # research Q&A
-  lint:          gemma4:12b         # health checks (lighter)
-  classify:      gemma4:12b         # domain/tag classification
+  lint:          gemma4:31b-cloud   # health checks
+  classify:      gemma4:31b-cloud   # domain/tag classification
   introspect:    gemma4:31b-cloud   # daily summary + recommendations
-  export_slides: gemma4:12b
-  export_charts: gemma4:12b
+  export_slides: gemma4:31b-cloud
+  export_charts: gemma4:31b-cloud
   embed: nomic-embed-text           # embeddings (local Ollama, optional)
 
 # Ollama settings (used when provider = ollama)

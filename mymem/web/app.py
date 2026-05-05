@@ -60,6 +60,8 @@ async def _lifespan(app: FastAPI):  # type: ignore[type-arg]
     app.state.wiki_dir    = wiki_dir
     app.state.index_path  = wiki_dir / "index.md"
     app.state.log_path    = wiki_dir / "log.md"
+    app.state.db_path      = Path(settings.paths.db).resolve()
+    app.state.rag_db_path  = Path(settings.paths.db).resolve().parent / "rag.db"
     app.state.curiosity_db = Path("data/curiosity.db").resolve()
     app.state.router      = router_from_settings(settings)
     app.state.templates   = Jinja2Templates(directory=str(TEMPLATES_DIR))

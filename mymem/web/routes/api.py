@@ -45,6 +45,13 @@ def _title_to_slug(title: str) -> str:
     return title.lower().replace(" ", "-")
 
 
+def _normalize_slug(slug: str) -> str:
+    if len(slug) > 200:
+        raise HTTPException(status_code=400, detail="Slug too long")
+    from mymem.wiki.types import slugify
+    return slugify(slug)
+
+
 from mymem.pipeline.search import search_concept
 
 
@@ -117,6 +124,7 @@ async def api_query(req: QueryRequest, request: Request) -> StreamingResponse:
 
     async def event_stream() -> AsyncIterator[str]:
         try:
+            rag_db = request.app.state.rag_db_path
             result = await query_wiki(
                 req.question,
                 wiki_dir=wiki_dir,
@@ -126,6 +134,7 @@ async def api_query(req: QueryRequest, request: Request) -> StreamingResponse:
                 top_k=req.top_k,
                 save=req.save,
                 domain_filter=domain_filter,
+                rag_db_path=rag_db if rag_db.exists() else None,
             )
             # Stream answer in chunks for a streaming feel
             words = result.answer.split(" ")
@@ -296,6 +305,7 @@ async def api_ingest(req: IngestRequest, request: Request) -> JSONResponse:
             tags=req.tags,
             domain=req.domain,
             max_concepts=request.app.state.settings.pipeline.max_concepts,
+            db_path=request.app.state.db_path,
         )
         return JSONResponse({
             "skipped":       result.skipped,
@@ -343,6 +353,7 @@ async def api_upload(
             tags=tag_list,
             domain=domain,
             max_concepts=request.app.state.settings.pipeline.max_concepts,
+            db_path=request.app.state.db_path,
         )
     finally:
         Path(tmp_path).unlink(missing_ok=True)
@@ -388,6 +399,7 @@ async def api_ingest_text(req: IngestTextRequest, request: Request) -> JSONRespo
             tags=req.tags,
             domain=req.domain,
             max_concepts=request.app.state.settings.pipeline.max_concepts,
+            db_path=request.app.state.db_path,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -413,6 +425,7 @@ async def api_page(slug: str, request: Request) -> JSONResponse:
     wiki_dir = request.app.state.wiki_dir
 
     from mymem.wiki.page import read_page, list_pages
+    slug = _normalize_slug(slug)
     path = wiki_dir / f"{slug}.md"
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Page '{slug}' not found")
@@ -442,6 +455,7 @@ async def api_page(slug: str, request: Request) -> JSONResponse:
         "created":   page.created.isoformat(),
         "updated":   page.updated.isoformat(),
         "slug":      slug,
+        "archived":  page.archived,
         "backlinks": backlinks,
         "toc":       toc,
         "related":   related,
@@ -453,18 +467,35 @@ async def api_page(slug: str, request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 @router.get("/related-web")
-async def api_related_web(concepts: str = "") -> StreamingResponse:
+async def api_related_web(
+    request: Request,
+    concepts: str = "",
+    page_slug: str = "",
+) -> StreamingResponse:
     """
-    Stream Wikipedia search results for a comma-separated list of concept titles.
+    Stream web search results for a comma-separated list of concept titles.
 
     Each SSE event is JSON: { slug, web_links: [{label, url, snippet, source}] }
     A final { done: true } event signals completion.
+
+    page_slug: slug of the current wiki page — used for TF-IDF context (Phase 2).
     """
     titles = [t.strip() for t in concepts.split(",") if t.strip()]
 
+    page_body = ""
+    if page_slug:
+        try:
+            wiki_dir: Path = request.app.state.wiki_dir
+            page_path = wiki_dir / f"{page_slug}.md"
+            if page_path.exists():
+                from mymem.wiki.page import read_page as _read_page
+                page_body = _read_page(page_path).body
+        except Exception:
+            pass
+
     async def _generate() -> AsyncIterator[str]:
         for title in titles:
-            links = await search_concept(title)
+            links = await search_concept(title, page_body=page_body)
             payload = json.dumps({"slug": _title_to_slug(title), "web_links": links})
             yield f"data: {payload}\n\n"
         yield 'data: {"done":true}\n\n'
@@ -492,6 +523,7 @@ async def api_page_update(slug: str, req: PageUpdateRequest, request: Request) -
     from dataclasses import replace
 
     wiki_dir = request.app.state.wiki_dir
+    slug = _normalize_slug(slug)
     path = wiki_dir / f"{slug}.md"
     if not path.resolve().is_relative_to(wiki_dir.resolve()):
         raise HTTPException(status_code=400, detail="Invalid slug")
@@ -506,6 +538,123 @@ async def api_page_update(slug: str, req: PageUpdateRequest, request: Request) -
     )
     write_page(updated)
     return JSONResponse({"ok": True, "tags": list(updated.tags), "domain": updated.domain.value})
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/page/{slug}
+# ---------------------------------------------------------------------------
+
+@router.delete("/page/{slug:path}")
+async def api_page_delete(slug: str, request: Request) -> JSONResponse:
+    from mymem.wiki.page import read_page
+    from mymem.wiki.index import IndexManager
+
+    wiki_dir = request.app.state.wiki_dir
+    slug = _normalize_slug(slug)
+    path = wiki_dir / f"{slug}.md"
+    if not path.resolve().is_relative_to(wiki_dir.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid slug")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Page '{slug}' not found")
+
+    page = read_page(path)
+    path.unlink()
+
+    index_path = wiki_dir / "index.md"
+    if index_path.exists():
+        IndexManager(index_path).remove(page.title)
+
+    return JSONResponse({"ok": True, "deleted": slug})
+
+
+# ---------------------------------------------------------------------------
+# POST /api/page/{slug}/archive   POST /api/page/{slug}/restore
+# ---------------------------------------------------------------------------
+
+@router.post("/page/{slug:path}/archive")
+async def api_page_archive(slug: str, request: Request) -> JSONResponse:
+    from mymem.wiki.page import read_page, write_page
+    from mymem.wiki.index import IndexManager
+    import dataclasses
+
+    wiki_dir = request.app.state.wiki_dir
+    slug = _normalize_slug(slug)
+    path = wiki_dir / f"{slug}.md"
+    if not path.resolve().is_relative_to(wiki_dir.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid slug")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Page '{slug}' not found")
+
+    page = read_page(path)
+    if page.archived:
+        return JSONResponse({"ok": True, "archived": True})
+
+    write_page(dataclasses.replace(page, archived=True))
+
+    index_path = wiki_dir / "index.md"
+    if index_path.exists():
+        IndexManager(index_path).remove(page.title)
+
+    return JSONResponse({"ok": True, "archived": True})
+
+
+@router.post("/page/{slug:path}/restore")
+async def api_page_restore(slug: str, request: Request) -> JSONResponse:
+    from mymem.wiki.page import read_page, write_page
+    from mymem.wiki.index import IndexManager
+    from mymem.wiki.types import IndexEntry
+    import dataclasses
+
+    wiki_dir = request.app.state.wiki_dir
+    slug = _normalize_slug(slug)
+    path = wiki_dir / f"{slug}.md"
+    if not path.resolve().is_relative_to(wiki_dir.resolve()):
+        raise HTTPException(status_code=400, detail="Invalid slug")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Page '{slug}' not found")
+
+    page = read_page(path)
+    if not page.archived:
+        return JSONResponse({"ok": True, "archived": False})
+
+    restored = dataclasses.replace(page, archived=False)
+    write_page(restored)
+
+    index_path = wiki_dir / "index.md"
+    if index_path.exists():
+        IndexManager(index_path).upsert(IndexEntry(
+            title=restored.title,
+            path=path.relative_to(wiki_dir),
+            summary="",
+            category=restored.domain.value,
+            source_count=len(restored.sources),
+            domain=restored.domain,
+            tags=restored.tags,
+        ))
+
+    return JSONResponse({"ok": True, "archived": False})
+
+
+# ---------------------------------------------------------------------------
+# GET /api/archived  (list archived pages)
+# ---------------------------------------------------------------------------
+
+@router.get("/archived")
+async def api_archived(request: Request) -> JSONResponse:
+    from mymem.wiki.page import list_archived_pages
+
+    wiki_dir = request.app.state.wiki_dir
+    pages = list_archived_pages(wiki_dir)
+    return JSONResponse([
+        {
+            "title":  p.title,
+            "slug":   p.slug,
+            "domain": p.domain.value,
+            "tags":   list(p.tags),
+            "updated": p.updated.isoformat(),
+        }
+        for p in pages
+    ])
 
 
 # ---------------------------------------------------------------------------
@@ -659,6 +808,56 @@ async def api_introspect(
 # GET /api/curiosity
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# GET /api/analytics/youtube  — enrichment A/B comparison
+# ---------------------------------------------------------------------------
+
+@router.get("/analytics/youtube")
+async def api_analytics_youtube(request: Request) -> JSONResponse:
+    """
+    Compare wiki page quality between enriched (yt-dlp metadata) and plain
+    (transcript-only) YouTube ingests.
+
+    Response shape:
+      {
+        enriched: { count, avg_concepts, avg_page_chars, avg_wikilinks },
+        plain:    { count, avg_concepts, avg_page_chars, avg_wikilinks },
+        delta:    { concepts_pct, page_chars_pct, wikilinks_pct }   // % improvement
+      }
+    """
+    from mymem.observability.ingest_analytics import youtube_comparison, recent_ingests
+
+    db_path = request.app.state.db_path
+    stats   = youtube_comparison(db_path)
+    recent  = recent_ingests(db_path, limit=10)
+
+    def _delta_pct(enriched: float, plain: float) -> float | None:
+        if plain == 0:
+            return None
+        return round((enriched - plain) / plain * 100, 1)
+
+    return JSONResponse({
+        "enriched": {
+            "count":           stats.enriched_count,
+            "avg_concepts":    round(stats.enriched_avg_concepts, 2),
+            "avg_page_chars":  round(stats.enriched_avg_page_chars),
+            "avg_wikilinks":   round(stats.enriched_avg_wikilinks, 2),
+        },
+        "plain": {
+            "count":           stats.plain_count,
+            "avg_concepts":    round(stats.plain_avg_concepts, 2),
+            "avg_page_chars":  round(stats.plain_avg_page_chars),
+            "avg_wikilinks":   round(stats.plain_avg_wikilinks, 2),
+        },
+        "delta": {
+            "concepts_pct":    _delta_pct(stats.enriched_avg_concepts,    stats.plain_avg_concepts),
+            "page_chars_pct":  _delta_pct(stats.enriched_avg_page_chars,  stats.plain_avg_page_chars),
+            "wikilinks_pct":   _delta_pct(stats.enriched_avg_wikilinks,   stats.plain_avg_wikilinks),
+        },
+        "recent": recent,
+    })
+
+
 @router.get("/curiosity")
 async def api_curiosity(request: Request, limit: int = 10) -> JSONResponse:
     curiosity_db = request.app.state.curiosity_db
@@ -670,3 +869,18 @@ async def api_curiosity(request: Request, limit: int = 10) -> JSONResponse:
         item["trend"] = "rising" if w >= 2.0 else ("fading" if w < 0.5 else "stable")
 
     return JSONResponse({"interests": interests})
+
+
+# ---------------------------------------------------------------------------
+# GET /api/rag/sources  — list indexed PDFs
+# ---------------------------------------------------------------------------
+
+@router.get("/rag/sources")
+async def api_rag_sources(request: Request) -> JSONResponse:
+    rag_db: Path = request.app.state.rag_db_path
+    if not rag_db.exists():
+        return JSONResponse({"sources": []})
+
+    from mymem.rag.store import list_sources
+    sources = list_sources(rag_db)
+    return JSONResponse({"sources": sources})

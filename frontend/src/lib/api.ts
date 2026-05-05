@@ -1,7 +1,7 @@
 import type {
   Page, PagedPages, Stats, GraphData, IngestResult, IntrospectResult,
   CuriosityResult, LintResult, SSEEvent, SourceType, Domain,
-  WikiPageData, LogEntry, HeatmapData, DailySummary,
+  WikiPageData, LogEntry, HeatmapData, DailySummary, ArchivedPage,
 } from './types';
 
 // In dev Vite proxies /api/* → :7860; in prod FastAPI serves everything
@@ -87,6 +87,33 @@ export async function patchPage(
   const data = await res.json();
   if (!res.ok) throw new Error(data.detail ?? 'Update failed');
   return data;
+}
+
+export async function deletePage(slug: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${BASE}/api/page/${slug}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail ?? 'Delete failed');
+  return data;
+}
+
+export async function archivePage(slug: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${BASE}/api/page/${slug}/archive`, { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail ?? 'Archive failed');
+  return data;
+}
+
+export async function restorePage(slug: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${BASE}/api/page/${slug}/restore`, { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail ?? 'Restore failed');
+  return data;
+}
+
+export async function fetchArchivedPages(): Promise<ArchivedPage[]> {
+  const res = await fetch(`${BASE}/api/archived`);
+  if (!res.ok) throw new Error(`GET /api/archived: ${res.status}`);
+  return res.json();
 }
 
 export async function fetchLog(limit = 15): Promise<LogEntry[]> {
@@ -198,9 +225,11 @@ export async function* streamQuery(payload: {
 
 export async function* streamRelatedWeb(
   concepts: string[],
+  pageSlug?: string,
 ): AsyncGenerator<{ slug: string; web_links: import('./types').RelatedWebLink[] } | { done: true }> {
   if (!concepts.length) return;
   const p = new URLSearchParams({ concepts: concepts.join(',') });
+  if (pageSlug) p.set('page_slug', pageSlug);
   const res = await fetch(`${BASE}/api/related-web?${p}`);
   if (!res.ok || !res.body) return;
 
