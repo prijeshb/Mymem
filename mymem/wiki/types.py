@@ -8,10 +8,35 @@ The LLM pipeline always creates new objects; it never mutates existing ones.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
+
+
+def slugify(text: str, max_len: int = 120) -> str:
+    """
+    Convert arbitrary text to a web-safe URL slug.
+
+    Steps (in order):
+      1. NFKD unicode decomposition — separates base letters from diacritics
+      2. Drop combining characters (strips accents: é→e, ü→u, etc.)
+      3. Lowercase
+      4. Replace whitespace, dashes, underscores, and slashes with a single hyphen
+      5. Remove all remaining non-alphanumeric / non-hyphen characters
+      6. Collapse consecutive hyphens
+      7. Strip leading/trailing hyphens
+      8. Truncate to max_len; fall back to "untitled" if empty
+    """
+    s = unicodedata.normalize("NFKD", text)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = s.lower()
+    s = re.sub(r"[\s–—_/\\-]+", "-", s)
+    s = re.sub(r"[^a-z0-9\-]", "", s)
+    s = re.sub(r"-{2,}", "-", s)
+    s = s.strip("-")
+    return s[:max_len] or "untitled"
 
 
 # ---------------------------------------------------------------------------
@@ -51,14 +76,15 @@ class WikiPage:
     `body` is the full markdown content (excluding frontmatter).
     """
 
-    title:   str
-    body:    str
-    path:    Path
-    tags:    tuple[str, ...] = field(default_factory=tuple)
-    sources: tuple[str, ...] = field(default_factory=tuple)
-    domain:  TagDomain       = TagDomain.MISC
-    created: date            = field(default_factory=date.today)
-    updated: date            = field(default_factory=date.today)
+    title:    str
+    body:     str
+    path:     Path
+    tags:     tuple[str, ...] = field(default_factory=tuple)
+    sources:  tuple[str, ...] = field(default_factory=tuple)
+    domain:   TagDomain       = TagDomain.MISC
+    created:  date            = field(default_factory=date.today)
+    updated:  date            = field(default_factory=date.today)
+    archived: bool            = False
 
     def __post_init__(self) -> None:
         # Coerce list → tuple so the dataclass stays hashable/frozen
@@ -71,8 +97,7 @@ class WikiPage:
 
     @property
     def slug(self) -> str:
-        """File stem derived from title."""
-        return self.title.lower().replace(" ", "-")
+        return slugify(self.title)
 
     def with_updated(self, **changes: object) -> "WikiPage":
         """Return a new WikiPage with fields replaced — never mutates self."""

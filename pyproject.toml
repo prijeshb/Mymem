@@ -32,6 +32,8 @@ dependencies = [
 
     # Search
     "rank-bm25==0.2.2",        # BM25 fallback when embeddings not available
+    "ddgs>=9.0",               # DuckDuckGo web search for related links
+    "scikit-learn>=1.4",       # TF-IDF keyword extraction + cosine similarity (Phase 2)
 
     # Web UI
     "markdown==3.6",
@@ -44,6 +46,7 @@ dependencies = [
 [project.optional-dependencies]
 media = [
     "youtube-transcript-api>=0.6.3",  # YouTube transcript fetching
+    "yt-dlp>=2024.1.0",               # YouTube metadata: title, description, chapters
 ]
 dev = [
     "pytest==9.0.2",

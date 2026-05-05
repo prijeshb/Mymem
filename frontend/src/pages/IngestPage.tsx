@@ -5,8 +5,59 @@ import type { IngestResult, SourceType } from '../lib/types';
 import { ALL_DOMAINS, SOURCE_TYPES } from '../lib/types';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Button, Card, Input, Tabs, TextArea } from '@heroui/react';
+import { LoadingSpinner } from '../components/LoadingSpinner';
 
 type Tab = 'url' | 'file' | 'text';
+
+// ---------------------------------------------------------------------------
+// URL → source type detection
+// ---------------------------------------------------------------------------
+
+function detectSourceType(url: string): SourceType | null {
+  try { new URL(url); } catch { return null; }   // not a valid URL
+  const u = url.toLowerCase();
+
+  if (
+    u.includes('youtube.com/watch') ||
+    u.includes('youtu.be/') ||
+    u.includes('youtube.com/embed/') ||
+    u.includes('youtube.com/shorts/')
+  ) return 'youtube';
+
+  if (u.includes('twitter.com/') || u.includes('x.com/')) return 'tweet';
+
+  if (
+    u.includes('arxiv.org/') ||
+    u.includes('papers.ssrn.com/') ||
+    u.includes('pubmed.ncbi.nlm.nih.gov/') ||
+    u.includes('semanticscholar.org/')
+  ) return 'paper';
+
+  if (
+    u.includes('open.spotify.com/episode') ||
+    u.includes('podcasts.apple.com/') ||
+    u.includes('anchor.fm/') ||
+    u.includes('overcast.fm/') ||
+    u.includes('pocketcasts.com/')
+  ) return 'podcast';
+
+  if (
+    u.includes('.substack.com/') ||
+    u.includes('beehiiv.com/') ||
+    u.includes('convertkit.com/')
+  ) return 'newsletter';
+
+  if (
+    u.includes('github.com/') ||
+    u.includes('gitlab.com/') ||
+    u.includes('bitbucket.org/')
+  ) return 'repo';
+
+  // Any other http/https URL → webpage
+  if (u.startsWith('http://') || u.startsWith('https://')) return 'webpage';
+
+  return null;
+}
 
 function estimateTokens(chars: number): number {
   return Math.ceil(chars / 4);
@@ -36,21 +87,38 @@ function SharedFields({
   sourceType, setSourceType,
   domain, setDomain,
   tags, setTags,
+  autoDetected, onManualTypeChange,
 }: {
   sourceType: SourceType; setSourceType: (v: SourceType) => void;
   domain: string; setDomain: (v: string) => void;
   tags: string; setTags: (v: string) => void;
+  autoDetected?: boolean;
+  onManualTypeChange?: (v: SourceType) => void;
 }) {
   return (
     <div className="space-y-4">
       <div>
-        <label htmlFor="source-type" className="block text-xs font-medium text-gray-300 mb-1">
-          Source type
-        </label>
+        <div className="flex items-center justify-between mb-1">
+          <label htmlFor="source-type" className="block text-xs font-medium text-gray-300">
+            Source type
+          </label>
+          {autoDetected && (
+            <span className="text-xs text-indigo-400 flex items-center gap-1">
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+              auto-detected
+            </span>
+          )}
+        </div>
         <select
           id="source-type"
           value={sourceType}
-          onChange={e => setSourceType(e.target.value as SourceType)}
+          onChange={e => {
+            const v = e.target.value as SourceType;
+            setSourceType(v);
+            onManualTypeChange?.(v);
+          }}
           className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-100
                      focus:outline-hidden focus:ring-2 focus:ring-indigo-400 [color-scheme:dark]"
         >
@@ -109,6 +177,7 @@ export function IngestPage() {
   const [tab, setTab] = useState<Tab>('url');
 
   const [sourceType, setSourceType] = useState<SourceType>('article');
+  const [autoDetected, setAutoDetected] = useState(false);
   const [domain, setDomain]         = useState('');
   const [tags, setTags]             = useState('');
 
@@ -195,6 +264,8 @@ export function IngestPage() {
                 sourceType={sourceType} setSourceType={setSourceType}
                 domain={domain} setDomain={setDomain}
                 tags={tags} setTags={setTags}
+                autoDetected={autoDetected}
+                onManualTypeChange={() => setAutoDetected(false)}
               />
               <form onSubmit={submitUrl} className="space-y-4 mt-4">
                 <div>
@@ -205,7 +276,17 @@ export function IngestPage() {
                     id="source-url"
                     type="text"
                     value={url}
-                    onChange={e => setUrl(e.target.value)}
+                    onChange={e => {
+                      const v = e.target.value;
+                      setUrl(v);
+                      const detected = detectSourceType(v);
+                      if (detected) {
+                        setSourceType(detected);
+                        setAutoDetected(true);
+                      } else {
+                        setAutoDetected(false);
+                      }
+                    }}
                     placeholder="https://example.com/article"
                     required
                     fullWidth
@@ -215,9 +296,9 @@ export function IngestPage() {
                     To upload a local file use the <strong className="text-gray-400">Upload File</strong> tab.
                   </p>
                 </div>
-                <Button type="submit" variant="primary" fullWidth isDisabled={loading}>
-                  {loading ? 'Ingesting…' : 'Ingest Source'}
-                </Button>
+                {loading
+                  ? <LoadingSpinner className="py-3" />
+                  : <Button type="submit" variant="primary" fullWidth>Ingest Source</Button>}
               </form>
             </Tabs.Panel>
 
@@ -237,7 +318,13 @@ export function IngestPage() {
                     ref={fileInputRef}
                     type="file"
                     accept=".md,.txt,.pdf,.html,.rst,.json,.csv"
-                    onChange={e => setFile(e.target.files?.[0] ?? null)}
+                    onChange={e => {
+                      const f = e.target.files?.[0] ?? null;
+                      setFile(f);
+                      if (f?.name.toLowerCase().endsWith('.pdf')) {
+                        setSourceType('paper');
+                      }
+                    }}
                     required
                     className="block w-full text-sm text-gray-300 cursor-pointer
                                file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0
@@ -254,9 +341,9 @@ export function IngestPage() {
                     </p>
                   )}
                 </div>
-                <Button type="submit" variant="primary" fullWidth isDisabled={loading || !file}>
-                  {loading ? 'Uploading…' : 'Upload & Ingest'}
-                </Button>
+                {loading
+                  ? <LoadingSpinner className="py-3" />
+                  : <Button type="submit" variant="primary" fullWidth isDisabled={!file}>Upload & Ingest</Button>}
               </form>
             </Tabs.Panel>
 
@@ -301,9 +388,9 @@ export function IngestPage() {
                     {text.length.toLocaleString()} chars · estimate only (actual depends on tokenizer)
                   </p>
                 </div>
-                <Button type="submit" variant="primary" fullWidth isDisabled={loading || !text.trim()}>
-                  {loading ? 'Ingesting…' : 'Ingest Text'}
-                </Button>
+                {loading
+                  ? <LoadingSpinner className="py-3" />
+                  : <Button type="submit" variant="primary" fullWidth isDisabled={!text.trim()}>Ingest Text</Button>}
               </form>
             </Tabs.Panel>
           </Tabs>

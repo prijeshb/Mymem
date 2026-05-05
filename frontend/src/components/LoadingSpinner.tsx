@@ -39,7 +39,7 @@ export function LoadingSpinner({ size = 'md', label, className = '' }: Props) {
       aria-live="polite"
       aria-label={text}
     >
-      <Spinner size={size} color="primary" />
+      <Spinner size={size} color="current" />
       <span className={`loading-word text-sm font-medium text-[#2563EB] dark:text-[#6ea8fe] ${visible ? 'loading-word--in' : ''}`}>
         {text}
       </span>

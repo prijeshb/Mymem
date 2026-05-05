@@ -8,9 +8,13 @@ from pathlib import Path
 
 import pytest
 
+from unittest.mock import AsyncMock, patch
+
 from mymem.pipeline.ingest import (
     IngestResult, ingest_source, _parse_ideas, _strip_frontmatter,
     _is_youtube_url, _html_to_text, _read_source, _extract_video_id, _read_youtube,
+    _format_duration, _format_chapters, _build_youtube_context, _fetch_youtube_metadata,
+    _rag_index_pdf,
 )
 from mymem.pipeline.router import ModelRouter
 from mymem.wiki.index import IndexManager
@@ -453,6 +457,237 @@ class TestReadYoutube:
         assert self.VIDEO_ID in text
 
 
+class TestFormatDuration:
+    def test_seconds_only(self):
+        assert _format_duration(45) == "0:45"
+
+    def test_minutes_and_seconds(self):
+        assert _format_duration(125) == "2:05"
+
+    def test_hours(self):
+        assert _format_duration(3661) == "1:01:01"
+
+    def test_exact_hour(self):
+        assert _format_duration(3600) == "1:00:00"
+
+    def test_float_truncated(self):
+        assert _format_duration(90.9) == "1:30"
+
+    def test_zero(self):
+        assert _format_duration(0) == "0:00"
+
+
+class TestFormatChapters:
+    def test_formats_chapters(self):
+        chapters = [
+            {"title": "Introduction", "start_time": 0.0},
+            {"title": "Deep dive", "start_time": 754.0},
+            {"title": "Conclusion", "start_time": 3540.0},
+        ]
+        result = _format_chapters(chapters)
+        assert "0:00  Introduction" in result
+        assert "12:34  Deep dive" in result
+        assert "59:00  Conclusion" in result
+
+    def test_empty_list(self):
+        assert _format_chapters([]) == ""
+
+    def test_missing_title_uses_empty_string(self):
+        result = _format_chapters([{"start_time": 10.0}])
+        assert "0:10  " in result
+
+
+class TestBuildYoutubeContext:
+    FULL_INFO = {
+        "title": "Let's build GPT from scratch",
+        "uploader": "Andrej Karpathy",
+        "upload_date": "20230117",
+        "duration": 7004,
+        "description": "We build a GPT model step by step.",
+        "chapters": [
+            {"title": "Introduction", "start_time": 0.0},
+            {"title": "Bigram model", "start_time": 765.0},
+        ],
+    }
+
+    def test_includes_title(self):
+        result = _build_youtube_context(self.FULL_INFO, "abc123", "transcript text")
+        assert "Let's build GPT from scratch" in result
+
+    def test_includes_channel_and_date(self):
+        result = _build_youtube_context(self.FULL_INFO, "abc123", "transcript text")
+        assert "Andrej Karpathy" in result
+        assert "2023-01-17" in result
+
+    def test_includes_duration(self):
+        result = _build_youtube_context(self.FULL_INFO, "abc123", "transcript text")
+        assert "1:56:44" in result
+
+    def test_includes_chapters(self):
+        result = _build_youtube_context(self.FULL_INFO, "abc123", "transcript text")
+        assert "Introduction" in result
+        assert "Bigram model" in result
+
+    def test_includes_transcript(self):
+        result = _build_youtube_context(self.FULL_INFO, "abc123", "hello world transcript")
+        assert "hello world transcript" in result
+
+    def test_description_truncated_at_1500(self):
+        long_desc = "x" * 2000
+        info = {**self.FULL_INFO, "description": long_desc}
+        result = _build_youtube_context(info, "abc123", "t")
+        assert "..." in result
+        desc_part = result.split("Description:\n")[1].split("\n\n")[0]
+        assert len(desc_part) <= 1504  # 1500 + "..."
+
+    def test_no_chapters_omits_section(self):
+        info = {**self.FULL_INFO, "chapters": []}
+        result = _build_youtube_context(info, "abc123", "t")
+        assert "Chapters:" not in result
+
+    def test_empty_info_falls_back_gracefully(self):
+        result = _build_youtube_context({}, "abc123", "some transcript")
+        assert "abc123" in result
+        assert "some transcript" in result
+
+    def test_video_id_always_in_header(self):
+        result = _build_youtube_context(self.FULL_INFO, "xyz999", "t")
+        assert "xyz999" in result
+
+
+class TestFetchYoutubeMetadata:
+    TARGET_URL = "https://www.youtube.com/watch?v=4zk-hJ50vmU"
+
+    @pytest.mark.asyncio
+    async def test_returns_dict_on_success(self, monkeypatch):
+        pytest.importorskip("yt_dlp")
+
+        fake_info = {"title": "Test Video", "uploader": "Test Channel", "duration": 300}
+
+        class FakeYDL:
+            def __init__(self, opts):
+                pass
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                pass
+            def extract_info(self, url, download=False):
+                return fake_info
+
+        monkeypatch.setattr("yt_dlp.YoutubeDL", FakeYDL)
+        result = await _fetch_youtube_metadata(self.TARGET_URL)
+        assert result["title"] == "Test Video"
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_dict_when_yt_dlp_not_installed(self, monkeypatch):
+        import mymem.pipeline.ingest as ingest_mod
+        import builtins
+        real_import = builtins.__import__
+
+        def _block_ytdlp(name, *args, **kwargs):
+            if name == "yt_dlp":
+                raise ImportError("no module yt_dlp")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _block_ytdlp)
+        result = await _fetch_youtube_metadata(self.TARGET_URL)
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_dict_on_extract_failure(self, monkeypatch):
+        pytest.importorskip("yt_dlp")
+
+        class FakeYDL:
+            def __init__(self, opts):
+                pass
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                pass
+            def extract_info(self, url, download=False):
+                raise RuntimeError("network error")
+
+        monkeypatch.setattr("yt_dlp.YoutubeDL", FakeYDL)
+        result = await _fetch_youtube_metadata(self.TARGET_URL)
+        assert result == {}
+
+
+class TestReadYoutubeEnriched:
+    """_read_youtube produces enriched output when yt-dlp metadata is available."""
+
+    FAKE_ENTRIES = [
+        {"text": "Hello and welcome.", "start": 0.0, "duration": 3.0},
+        {"text": "Today we discuss transformers.", "start": 3.0, "duration": 4.0},
+    ]
+    TARGET_URL = "https://www.youtube.com/watch?v=4zk-hJ50vmU"
+    VIDEO_ID   = "4zk-hJ50vmU"
+    FAKE_META  = {
+        "title":       "Understanding Transformers",
+        "uploader":    "ML Channel",
+        "upload_date": "20240301",
+        "duration":    420,
+        "description": "A deep dive into transformer architecture.",
+        "chapters": [
+            {"title": "Intro", "start_time": 0.0},
+            {"title": "Attention", "start_time": 60.0},
+        ],
+    }
+
+    def _make_snippet(self, text: str):
+        class Snippet:
+            def __init__(self, t): self.text = t
+        return Snippet(text)
+
+    @pytest.mark.asyncio
+    async def test_enriched_output_includes_title_and_transcript(self, monkeypatch):
+        import mymem.pipeline.ingest as ingest_mod
+
+        fake_snippets = [self._make_snippet(e["text"]) for e in self.FAKE_ENTRIES]
+
+        class FakeAPIInstance:
+            def fetch(self, video_id, languages=None):
+                return fake_snippets
+
+        monkeypatch.setattr(ingest_mod, "YouTubeTranscriptApi", FakeAPIInstance)
+        monkeypatch.setattr(ingest_mod, "_YT_AVAILABLE", True)
+        monkeypatch.setattr(ingest_mod, "_fetch_youtube_metadata",
+                            lambda url: asyncio.coroutine(lambda: self.FAKE_META)())
+
+        async def fake_meta(url):
+            return self.FAKE_META
+
+        monkeypatch.setattr(ingest_mod, "_fetch_youtube_metadata", fake_meta)
+
+        text = await _read_youtube(self.TARGET_URL)
+        assert "Understanding Transformers" in text
+        assert "ML Channel" in text
+        assert "Attention" in text        # chapter
+        assert "transformers" in text     # transcript
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_transcript_only_when_no_metadata(self, monkeypatch):
+        import mymem.pipeline.ingest as ingest_mod
+
+        fake_snippets = [self._make_snippet(e["text"]) for e in self.FAKE_ENTRIES]
+
+        class FakeAPIInstance:
+            def fetch(self, video_id, languages=None):
+                return fake_snippets
+
+        monkeypatch.setattr(ingest_mod, "YouTubeTranscriptApi", FakeAPIInstance)
+        monkeypatch.setattr(ingest_mod, "_YT_AVAILABLE", True)
+
+        async def fake_meta_empty(url):
+            return {}
+
+        monkeypatch.setattr(ingest_mod, "_fetch_youtube_metadata", fake_meta_empty)
+
+        text = await _read_youtube(self.TARGET_URL)
+        assert self.VIDEO_ID in text
+        assert "Hello and welcome" in text
+        assert "Title:" not in text   # no metadata block
+
+
 class TestHtmlToText:
     def test_strips_tags(self):
         html = "<h1>Hello</h1><p>World</p>"
@@ -630,3 +865,64 @@ class TestReadSourceDispatch:
         # source_type=youtube forces YouTube reader
         text = await _read_source("https://youtu.be/ABCDE12345A", source_type="youtube")
         assert "YouTube transcript" in text
+
+
+# ---------------------------------------------------------------------------
+# _rag_index_pdf
+# ---------------------------------------------------------------------------
+
+class TestRagIndexPdf:
+    @pytest.mark.asyncio
+    async def test_calls_ingest_pdf_for_local_pdf(self, tmp_path: Path):
+        from mymem.rag.ingest import RagIngestResult
+
+        ok_result = RagIngestResult(source_path="paper.pdf", chunk_count=5)
+        with patch("mymem.rag.ingest.ingest_pdf", new=AsyncMock(return_value=ok_result)) as mock_ingest:
+            await _rag_index_pdf("paper.pdf", db_path=tmp_path / "main.db")
+        mock_ingest.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_logs_skipped_result(self, tmp_path: Path):
+        from mymem.rag.ingest import RagIngestResult
+
+        skipped = RagIngestResult(source_path="x.pdf", skipped=True, skip_reason="already indexed")
+        with patch("mymem.rag.ingest.ingest_pdf", new=AsyncMock(return_value=skipped)):
+            await _rag_index_pdf("x.pdf", db_path=tmp_path / "main.db")
+        # no exception — skipped is handled gracefully
+
+    @pytest.mark.asyncio
+    async def test_logs_error_result(self, tmp_path: Path):
+        from mymem.rag.ingest import RagIngestResult
+
+        failed = RagIngestResult(source_path="x.pdf", error="embedding failed")
+        with patch("mymem.rag.ingest.ingest_pdf", new=AsyncMock(return_value=failed)):
+            await _rag_index_pdf("x.pdf", db_path=tmp_path / "main.db")
+        # no exception raised
+
+    @pytest.mark.asyncio
+    async def test_exception_is_swallowed(self, tmp_path: Path):
+        with patch("mymem.rag.ingest.ingest_pdf", new=AsyncMock(side_effect=RuntimeError("crash"))):
+            await _rag_index_pdf("x.pdf", db_path=tmp_path / "main.db")
+        # must not raise
+
+    @pytest.mark.asyncio
+    async def test_rag_db_derived_from_parent_when_db_path_given(self, tmp_path: Path):
+        from mymem.rag.ingest import RagIngestResult
+
+        ok_result = RagIngestResult(source_path="paper.pdf", chunk_count=2)
+        with patch("mymem.rag.ingest.ingest_pdf", new=AsyncMock(return_value=ok_result)) as mock_ingest:
+            await _rag_index_pdf("paper.pdf", db_path=tmp_path / "data" / "mymem.db")
+
+        call_kwargs = mock_ingest.call_args.kwargs
+        assert call_kwargs["db_path"] == tmp_path / "data" / "rag.db"
+
+    @pytest.mark.asyncio
+    async def test_rag_db_default_when_no_db_path(self, tmp_path: Path):
+        from mymem.rag.ingest import RagIngestResult
+
+        ok_result = RagIngestResult(source_path="paper.pdf", chunk_count=2)
+        with patch("mymem.rag.ingest.ingest_pdf", new=AsyncMock(return_value=ok_result)) as mock_ingest:
+            await _rag_index_pdf("paper.pdf", db_path=None)
+
+        call_kwargs = mock_ingest.call_args.kwargs
+        assert str(call_kwargs["db_path"]).endswith("rag.db")

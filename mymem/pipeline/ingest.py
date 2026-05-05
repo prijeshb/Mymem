@@ -172,11 +172,91 @@ def _extract_video_id(url: str) -> str | None:
     return None
 
 
-async def _read_youtube(url: str) -> str:
-    """Fetch a YouTube video transcript as plain text.
+async def _fetch_youtube_metadata(url: str) -> dict:
+    """Fetch video metadata (title, description, chapters, …) via yt-dlp.
 
-    Tries English first, falls back to any available language.
-    Raises RuntimeError if transcripts are disabled or the package is not installed.
+    Returns an empty dict if yt-dlp is not installed or the fetch fails.
+    Runs the blocking yt-dlp call in a thread executor so the event loop
+    stays responsive while waiting.
+    """
+    try:
+        import yt_dlp  # type: ignore[import-untyped]
+    except ImportError:
+        return {}
+
+    def _extract() -> dict:
+        opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            return info or {}
+
+    try:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _extract)
+    except Exception as exc:
+        log.warning("yt-dlp metadata fetch failed", url=url, error=str(exc))
+        return {}
+
+
+def _format_duration(seconds: int | float) -> str:
+    """Convert seconds to H:MM:SS or M:SS string."""
+    s = int(seconds)
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
+def _format_chapters(chapters: list[dict]) -> str:
+    """Format chapter list as 'MM:SS  Title' lines."""
+    return "\n".join(
+        f"{_format_duration(ch.get('start_time', 0))}  {ch.get('title', '')}"
+        for ch in chapters
+    )
+
+
+def _build_youtube_context(info: dict, video_id: str, transcript: str) -> str:
+    """Combine yt-dlp metadata with transcript into a rich context string for the LLM."""
+    parts: list[str] = []
+
+    title        = info.get("title", "")
+    channel      = info.get("uploader") or info.get("channel", "")
+    upload_date  = info.get("upload_date", "")      # "YYYYMMDD"
+    duration     = info.get("duration")
+    description  = (info.get("description") or "").strip()
+    chapters     = info.get("chapters") or []
+
+    # Header block
+    header = f"[YouTube Video — ID: {video_id}]"
+    if title:
+        header += f"\nTitle: {title}"
+    meta: list[str] = []
+    if channel:
+        meta.append(f"Channel: {channel}")
+    if upload_date and len(upload_date) == 8:
+        meta.append(f"Published: {upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}")
+    if duration is not None:
+        meta.append(f"Duration: {_format_duration(duration)}")
+    if meta:
+        header += "\n" + "  |  ".join(meta)
+    parts.append(header)
+
+    if description:
+        preview = description[:1500] + ("..." if len(description) > 1500 else "")
+        parts.append(f"Description:\n{preview}")
+
+    if chapters:
+        parts.append(f"Chapters:\n{_format_chapters(chapters)}")
+
+    parts.append(f"Transcript:\n{transcript}")
+    return "\n\n".join(parts)
+
+
+async def _read_youtube(url: str) -> str:
+    """Fetch YouTube transcript enriched with video metadata when yt-dlp is available.
+
+    Metadata (title, description, chapters, channel, date) is fetched via yt-dlp
+    concurrently with the transcript to keep total latency low.
+    Falls back to transcript-only output if yt-dlp is not installed.
     """
     if not _YT_AVAILABLE:
         raise RuntimeError(
@@ -188,11 +268,16 @@ async def _read_youtube(url: str) -> str:
     if not video_id:
         raise ValueError(f"Cannot extract YouTube video ID from URL: {url!r}")
 
-    log.info("Fetching YouTube transcript", video_id=video_id)
+    log.info("Fetching YouTube video", video_id=video_id)
+
+    # Kick off metadata fetch in background while transcript fetch runs
+    metadata_task = asyncio.ensure_future(_fetch_youtube_metadata(url))
+
     api = YouTubeTranscriptApi()
     try:
         fetched = api.fetch(video_id, languages=["en", "en-US", "en-GB"])
     except TranscriptsDisabled:
+        metadata_task.cancel()
         raise RuntimeError(f"Transcripts are disabled for YouTube video: {video_id}")
     except NoTranscriptFound:
         try:
@@ -200,12 +285,19 @@ async def _read_youtube(url: str) -> str:
             transcript = next(iter(transcript_list))
             fetched = transcript.fetch()
         except StopIteration:
+            metadata_task.cancel()
             raise RuntimeError(f"No transcripts available for video: {video_id}")
 
-    lines = [s.text for s in fetched if s.text.strip()]
-    full_text = " ".join(lines)
-    log.info("YouTube transcript fetched", video_id=video_id, chars=len(full_text))
-    return f"[YouTube transcript — video ID: {video_id}]\n\n{full_text}"
+    transcript_text = " ".join(s.text for s in fetched if s.text.strip())
+    log.info("YouTube transcript fetched", video_id=video_id, chars=len(transcript_text))
+
+    info = await metadata_task
+    if info:
+        log.info("YouTube metadata fetched", video_id=video_id, title=info.get("title", ""))
+        return _build_youtube_context(info, video_id, transcript_text)
+
+    # Fallback: transcript only (yt-dlp not installed or fetch failed)
+    return f"[YouTube transcript — video ID: {video_id}]\n\n{transcript_text}"
 
 
 def _html_to_text(html: bytes | str) -> str:
@@ -268,7 +360,7 @@ _SOURCE_TYPE_HINTS: dict[str, str] = {
     "repo":       "a code repository or technical project",
     "dataset":    "a data file or dataset",
     "image":      "an image or visual document",
-    "youtube":    "a YouTube video transcript",
+    "youtube":    "a YouTube video (transcript with title, description, and chapter markers)",
     "podcast":    "a podcast episode or show notes",
     "tweet":      "a tweet or Twitter/X thread",
     "webpage":    "a general web page",
@@ -327,6 +419,7 @@ async def ingest_source(
     domain: str = "",
     title_hint: str | None = None,
     max_concepts: int = 3,
+    db_path: Path | None = None,
 ) -> IngestResult:
     """
     Ingest a source document into the wiki.
@@ -506,7 +599,88 @@ async def ingest_source(
         pages_updated=len(result.pages_updated),
         chunks=chunk_count, cost=f"${router.session_cost:.4f}",
     )
+
+    # Record quality analytics for YouTube ingests
+    if db_path and (source_type == "youtube" or _is_youtube_url(source)):
+        _record_youtube_analytics(
+            db_path=db_path,
+            source_text=source_text,
+            all_ideas=all_ideas,
+            result=result,
+            wiki_dir=wiki_dir,
+        )
+
+    # RAG indexing for local PDF sources
+    if (
+        source_type in ("pdf", "paper")
+        and not source.startswith(("http://", "https://"))
+        and Path(source).suffix.lower() == ".pdf"
+    ):
+        await _rag_index_pdf(source, db_path=db_path)
+
     return result
+
+
+async def _rag_index_pdf(source: str, *, db_path: Path | None) -> None:
+    """Index a local PDF into the RAG vector store (best-effort; never raises)."""
+    try:
+        from mymem.config import get_settings
+        from mymem.rag.ingest import ingest_pdf
+
+        settings = get_settings()
+        rag_db = db_path.parent / "rag.db" if db_path else Path("data/rag.db")
+        rag_result = await ingest_pdf(
+            Path(source),
+            db_path=rag_db,
+            base_url=settings.ollama.base_url,
+        )
+        if rag_result.skipped:
+            log.info("RAG index: already indexed", source=source, reason=rag_result.skip_reason)
+        elif rag_result.ok:
+            log.info("RAG index: complete", source=source, chunks=rag_result.chunk_count)
+        else:
+            log.warning("RAG index: failed", source=source, error=rag_result.error)
+    except Exception as exc:
+        log.warning("RAG indexing raised unexpectedly — continuing", source=source, error=str(exc))
+
+
+def _record_youtube_analytics(
+    *,
+    db_path: Path,
+    source_text: str,
+    all_ideas: list[dict[str, object]],
+    result: "IngestResult",
+    wiki_dir: Path,
+) -> None:
+    """Measure quality of generated pages and persist analytics record."""
+    from mymem.observability.ingest_analytics import record_ingest
+
+    all_touched = result.pages_written + result.pages_updated
+    page_chars: list[int] = []
+    page_wikilinks: list[int] = []
+    for title in all_touched:
+        page_path = slug_to_path(wiki_dir, title)
+        try:
+            p = read_page(page_path)
+            page_chars.append(len(p.body))
+            page_wikilinks.append(len(p.wikilinks()))
+        except Exception:
+            pass
+
+    avg_chars = sum(page_chars) / len(page_chars) if page_chars else 0.0
+    avg_links = sum(page_wikilinks) / len(page_wikilinks) if page_wikilinks else 0.0
+
+    record_ingest(
+        db_path,
+        source_type="youtube",
+        metadata_enriched="[YouTube Video — ID:" in source_text,
+        source_chars=len(source_text),
+        concepts_extracted=len(all_ideas),
+        pages_written=len(result.pages_written),
+        pages_updated=len(result.pages_updated),
+        avg_page_chars=avg_chars,
+        avg_wikilinks=avg_links,
+    )
 
 
 # ---------------------------------------------------------------------------
