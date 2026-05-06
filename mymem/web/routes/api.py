@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import AsyncIterator
 
 import shutil
-import tempfile
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -30,7 +29,6 @@ from mymem.pipeline.introspect import introspect, top_interests
 from mymem.pipeline.lint import format_lint_report, lint_wiki
 from mymem.pipeline.query import query_wiki
 from mymem.wiki.index import IndexManager
-from mymem.wiki.log import WikiLog
 from mymem.wiki.page import list_pages
 from mymem.wiki.types import TagDomain
 
@@ -322,6 +320,17 @@ async def api_ingest(req: IngestRequest, request: Request) -> JSONResponse:
 # POST /api/upload  (multipart file upload → ingest)
 # ---------------------------------------------------------------------------
 
+_SOURCE_TYPE_SUBDIR: dict[str, str] = {
+    "paper":     "papers",
+    "book":      "books",
+    "article":   "articles",
+    "dataset":   "datasets",
+    "repo":      "repos",
+    "image":     "images",
+    "note":      "notes",
+}
+
+
 @router.post("/upload")
 async def api_upload(
     request: Request,
@@ -334,29 +343,42 @@ async def api_upload(
     index_path = request.app.state.index_path
     log_path   = request.app.state.log_path
     llm_router = request.app.state.router
+    settings   = request.app.state.settings
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
 
-    suffix = Path(file.filename or "upload").suffix or ".txt"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = tmp.name
+    # Save to raw/<subdir>/ so PDFs persist for RAG indexing
+    raw_root = Path(settings.paths.raw).resolve()
+    subdir   = _SOURCE_TYPE_SUBDIR.get(source_type, "misc")
+    dest_dir = raw_root / subdir
+    dest_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        result = await ingest_source(
-            tmp_path,
-            wiki_dir=wiki_dir,
-            index_path=index_path,
-            log_path=log_path,
-            router=llm_router,
-            source_type=source_type,
-            tags=tag_list,
-            domain=domain,
-            max_concepts=request.app.state.settings.pipeline.max_concepts,
-            db_path=request.app.state.db_path,
-        )
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
+    safe_name = Path(file.filename or "upload").name.replace(" ", "_")
+    dest_path = dest_dir / safe_name
+    # Avoid silent overwrites — append suffix if file already exists
+    if dest_path.exists():
+        stem   = dest_path.stem
+        suffix = dest_path.suffix
+        counter = 1
+        while dest_path.exists():
+            dest_path = dest_dir / f"{stem}_{counter}{suffix}"
+            counter += 1
+
+    with dest_path.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    result = await ingest_source(
+        str(dest_path),
+        wiki_dir=wiki_dir,
+        index_path=index_path,
+        log_path=log_path,
+        router=llm_router,
+        source_type=source_type,
+        tags=tag_list,
+        domain=domain,
+        max_concepts=settings.pipeline.max_concepts,
+        db_path=request.app.state.db_path,
+    )
 
     return JSONResponse({
         "skipped":       result.skipped,
@@ -364,6 +386,9 @@ async def api_upload(
         "pages_written": result.pages_written,
         "pages_updated": result.pages_updated,
         "chunk_count":   result.chunk_count,
+        "rag_only":      result.rag_only,
+        "rag_chunks":    result.rag_chunks,
+        "saved_to":      str(dest_path.relative_to(Path.cwd()) if dest_path.is_relative_to(Path.cwd()) else dest_path),
     })
 
 
@@ -655,53 +680,6 @@ async def api_archived(request: Request) -> JSONResponse:
         }
         for p in pages
     ])
-
-
-# ---------------------------------------------------------------------------
-# GET /api/log  (recent wiki log entries)
-# ---------------------------------------------------------------------------
-
-@router.get("/log")
-async def api_log(request: Request, limit: int = 15) -> JSONResponse:
-    log_path = request.app.state.log_path
-    wiki_log = WikiLog(log_path)
-    entries  = wiki_log.recent(limit)
-    return JSONResponse([
-        {
-            "ts":            e.timestamp.isoformat(),
-            "operation":     e.operation.value,
-            "description":   e.description,
-            "affected_pages": list(e.affected_pages),
-        }
-        for e in entries
-    ])
-
-
-# ---------------------------------------------------------------------------
-# GET /api/heatmap  (16-week daily activity counts)
-# ---------------------------------------------------------------------------
-
-@router.get("/heatmap")
-async def api_heatmap(request: Request) -> JSONResponse:
-    from datetime import date, timedelta
-    log_path = request.app.state.log_path
-    wiki_log = WikiLog(log_path)
-
-    today     = date.today()
-    start_day = today - timedelta(days=111)
-    day_counts: dict[str, int] = {}
-    for entry in wiki_log.load():
-        d = entry.timestamp.date()
-        if d >= start_day:
-            key = d.isoformat()
-            day_counts[key] = day_counts.get(key, 0) + 1
-
-    days = []
-    for i in range(112):
-        d = start_day + timedelta(days=i)
-        days.append({"date": d.isoformat(), "count": day_counts.get(d.isoformat(), 0)})
-
-    return JSONResponse({"days": days})
 
 
 # ---------------------------------------------------------------------------

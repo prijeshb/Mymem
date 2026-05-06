@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { marked } from 'marked';
-import { fetchStats, fetchPagesPaged, fetchLog, streamQuery, titleToSlug } from '../lib/api';
-import type { Stats, LogEntry, Domain } from '../lib/types';
+import { fetchStats, fetchPagesPaged, streamQuery, titleToSlug } from '../lib/api';
+import type { Stats, Domain } from '../lib/types';
 import { ALL_DOMAINS } from '../lib/types';
 import { DomainBadge } from '../components/DomainBadge';
 import { CitationChip } from '../components/CitationChip';
@@ -101,7 +101,6 @@ export function DashboardPage() {
   const [stats, setStats]               = useState<Stats | null>(null);
   const [pagedEntries, setPagedEntries] = useState<import('../lib/types').Page[]>([]);
   const [pagesTotal, setPagesTotal]     = useState(0);
-  const [log, setLog]                   = useState<LogEntry[]>([]);
   const [filter, setFilter]             = useState('');
   const [pagesCurrent, setPagesCurrent] = useState(0);
   const [question, setQuestion]         = useState('');
@@ -116,8 +115,8 @@ export function DashboardPage() {
   useKeyboardShortcut('/', () => inputRef.current?.focus());
 
   useEffect(() => {
-    Promise.all([fetchStats(), fetchLog(15)])
-      .then(([s, l]) => { setStats(s); setLog(l); })
+    fetchStats()
+      .then(s => setStats(s))
       .catch(e => setError(String(e)))
       .finally(() => setLoadingStats(false));
   }, []);
@@ -170,7 +169,6 @@ export function DashboardPage() {
                   ['Pages', stats.page_count],
                   ['Sources', stats.source_count],
                   ['Orphans', stats.orphan_count],
-                  ['Session cost', `$${stats.session_cost.toFixed(4)}`],
                 ].map(([label, value]) => (
                   <div key={String(label)} className="flex items-center justify-between text-sm">
                     <dt className="text-gray-400">{label}</dt>
@@ -187,36 +185,7 @@ export function DashboardPage() {
           <DomainHeatmap counts={stats.domain_counts} />
         )}
 
-        {/* Recent log */}
-        {log.length > 0 && (
-          <Card>
-            <Card.Header>
-              <Card.Title className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-                Recent Activity
-              </Card.Title>
-            </Card.Header>
-            <Card.Content>
-              <ul className="space-y-2">
-                {log.slice(0, 8).map((entry, i) => (
-                  <li key={i} className="text-xs">
-                    <span className={`inline-block px-1.5 py-0.5 rounded text-xs mr-1.5 ${
-                      entry.operation === 'ingest'
-                        ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
-                        : entry.operation === 'query'
-                        ? 'bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300'
-                        : entry.operation === 'introspect'
-                        ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300'
-                        : 'bg-gray-800 text-gray-400'
-                    }`}>
-                      {entry.operation}
-                    </span>
-                    <span className="text-gray-400 truncate">{entry.description}</span>
-                  </li>
-                ))}
-              </ul>
-            </Card.Content>
-          </Card>
-        )}
+
       </aside>
 
       {/* ── Right main area ── */}

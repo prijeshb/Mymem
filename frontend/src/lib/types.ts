@@ -75,6 +75,8 @@ export interface IngestResult {
   pages_written: string[];
   pages_updated: string[];
   chunk_count: number;
+  rag_only: boolean;
+  rag_chunks: number;
 }
 
 export interface Recommendation {

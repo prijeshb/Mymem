@@ -322,6 +322,7 @@ def serve(
     port: int  = typer.Option(7860, "--port", "-p", help="Port to listen on"),
     host: str  = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Open browser on start"),
+    dev: bool  = typer.Option(False, "--dev", help="Dev mode: skip serving frontend/dist, enable uvicorn reload"),
 ) -> None:
     """Start the web UI."""
     try:
@@ -330,19 +331,27 @@ def serve(
         err.print("uvicorn not installed. Run: pip install uvicorn")
         raise typer.Exit(1)
 
-    url = f"http://{host}:{port}"
-    console.print(f"[bold green]MyMem[/] web UI → [link={url}]{url}[/link]")
-
-    if open_browser:
-        import threading, webbrowser
-        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    if dev:
+        import os
+        os.environ["MYMEM_DEV"] = "1"
+        console.print(
+            "[bold green]MyMem[/] API → [bold]http://{host}:{port}[/bold]  "
+            "[dim](dev mode — open http://localhost:5173 after running npm run dev in frontend/)[/dim]"
+            .format(host=host, port=port)
+        )
+    else:
+        url = f"http://{host}:{port}"
+        console.print(f"[bold green]MyMem[/] web UI → [link={url}]{url}[/link]")
+        if open_browser:
+            import threading, webbrowser
+            threading.Timer(1.2, lambda: webbrowser.open(url)).start()
 
     uvicorn.run(
         "mymem.web.app:app",
         host=host,
         port=port,
-        reload=False,
-        log_level="warning",
+        reload=dev,
+        log_level="info" if dev else "warning",
     )
 
 

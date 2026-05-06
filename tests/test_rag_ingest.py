@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mymem.rag.embedder import EMBED_DIM, embed_query, embed_texts
-from mymem.rag.ingest import RagIngestResult, ingest_pdf
+from mymem.rag.ingest import RagIngestResult, ingest_pdf, ingest_text_chunks
 from mymem.rag.store import init_db, list_sources, source_exists
 
 
@@ -239,3 +239,64 @@ class TestIngestPdf:
 
         skipped_result = RagIngestResult(source_path="x", skipped=True, skip_reason="already indexed")
         assert skipped_result.ok is False
+
+
+# ---------------------------------------------------------------------------
+# ingest_text_chunks
+# ---------------------------------------------------------------------------
+
+class TestIngestTextChunks:
+    @pytest.mark.asyncio
+    async def test_indexes_raw_text(self, tmp_path):
+        db = tmp_path / "mymem.db"
+        text = "Alpha paragraph.\n\nBeta paragraph with more words to fill the chunk up nicely."
+        # embed_texts returns one vector per chunk; use side_effect to match length dynamically
+        async def _embed(texts, **_kw):
+            return [_zero_vec()] * len(texts)
+
+        with patch("mymem.rag.ingest.embed_texts", new=AsyncMock(side_effect=_embed)):
+            result = await ingest_text_chunks(text, source_id="my-note", db_path=db)
+        assert result.ok
+        assert result.chunk_count >= 1
+        assert source_exists(db, "my-note")
+
+    @pytest.mark.asyncio
+    async def test_skip_already_indexed(self, tmp_path):
+        db = tmp_path / "mymem.db"
+        text = "Some content here."
+        async def _embed(texts, **_kw):
+            return [_zero_vec()] * len(texts)
+
+        with patch("mymem.rag.ingest.embed_texts", new=AsyncMock(side_effect=_embed)):
+            await ingest_text_chunks(text, source_id="note-a", db_path=db)
+            result = await ingest_text_chunks(text, source_id="note-a", db_path=db)
+        assert result.skipped
+        assert result.skip_reason == "already indexed"
+
+    @pytest.mark.asyncio
+    async def test_force_reindexes(self, tmp_path):
+        db = tmp_path / "mymem.db"
+        text = "Content for reindex test."
+        async def _embed(texts, **_kw):
+            return [_zero_vec()] * len(texts)
+
+        with patch("mymem.rag.ingest.embed_texts", new=AsyncMock(side_effect=_embed)):
+            await ingest_text_chunks(text, source_id="note-b", db_path=db)
+            result = await ingest_text_chunks(text, source_id="note-b", db_path=db, force=True)
+        assert result.ok
+
+    @pytest.mark.asyncio
+    async def test_empty_text_returns_error(self, tmp_path):
+        db = tmp_path / "mymem.db"
+        result = await ingest_text_chunks("   ", source_id="empty", db_path=db)
+        assert not result.ok
+        assert "Empty text" in result.error
+
+    @pytest.mark.asyncio
+    async def test_embed_failure_returns_error(self, tmp_path):
+        db = tmp_path / "mymem.db"
+        text = "Some text to embed."
+        with patch("mymem.rag.ingest.embed_texts", new=AsyncMock(side_effect=RuntimeError("no ollama"))):
+            result = await ingest_text_chunks(text, source_id="note-c", db_path=db)
+        assert "Embedding failed" in result.error
+        assert not result.ok

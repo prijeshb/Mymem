@@ -9,11 +9,13 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -79,20 +81,39 @@ def create_app() -> FastAPI:
 
     # API routes first — must be registered before the catch-alls
     from mymem.web.routes.api import router as api_router
+    from mymem.web.routes.logs import router as logs_router
     app.include_router(api_router, prefix="/api")
+    app.include_router(logs_router, prefix="/api")
 
-    # Serve React build (production)
-    if FRONTEND_DIST.exists():
+    dev_mode = bool(os.environ.get("MYMEM_DEV"))
+
+    if dev_mode:
+        # Allow Vite dev server (port 5174) to call the API directly
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["http://localhost:5174"],
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+        @app.get("/", include_in_schema=False)
+        async def dev_root() -> JSONResponse:
+            return JSONResponse({
+                "mode": "dev",
+                "ui":   "http://localhost:5174",
+                "docs": "/docs",
+            })
+
+    elif FRONTEND_DIST.exists():
+        # Production: serve the Vite build as static files
         assets_dir = FRONTEND_DIST / "assets"
         if assets_dir.exists():
             app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
         @app.get("/{full_path:path}", include_in_schema=False)
         async def spa_fallback(full_path: str) -> FileResponse:
-            # Never intercept API calls — let them 404 as JSON
             if full_path.startswith("api/"):
                 raise HTTPException(status_code=404, detail=f"API route not found: /{full_path}")
-            # Serve real files (favicon, manifest, etc.) if they exist
             candidate = FRONTEND_DIST / full_path
             if candidate.is_file():
                 return FileResponse(str(candidate))
@@ -102,7 +123,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Frontend not built")
 
     else:
-        # Development fallback: old Jinja2 pages still work when React isn't built
+        # Jinja2 fallback when frontend/dist is absent and not in dev mode
         if STATIC_DIR.exists():
             app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
         from mymem.web.routes.pages import router as pages_router

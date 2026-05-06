@@ -131,3 +131,90 @@ A living log of mistakes made, lessons learned, and feature delivery assessments
 **See full audit:** `docs/security_audit.md`
 
 **Lesson:** Writing security utilities is not enough — they must be imported and called at every entry point. Wire them in during initial implementation, not as an afterthought.
+
+---
+
+## [2026-05-05] PDF Ingestion — Chunking Strategy & Pipeline Order
+
+**Context:** User uploaded a 100-page PDF via the Upload File tab and asked why chunking happens after idea extraction, and whether there's a better approach.
+
+**How the pipeline actually works (two separate chunking steps):**
+1. **LLM chunking** (`ChunkSplitter(max_tokens=6000)`) — splits raw PDF text so it fits the model's context window. Ideas are extracted per chunk. This runs *before* idea extraction.
+2. **RAG chunking** (`_rag_index_pdf`) — re-chunks the same PDF into small overlapping windows, embeds them with `nomic-embed-text`, stores in `rag.db` for vector search. This runs *after* wiki pages are written because it's a separate concern (retrieval index, not knowledge extraction).
+
+**The real problem — `max_tokens=6000` is far too conservative:**
+- The compile model (`gemma4:12b`) has a 128k context window.
+- A 100-page PDF is ~100k tokens.
+- At 6000 tokens/chunk that's ~17 LLM calls, each blind to the others, producing duplicates.
+- Simply raising the limit to match the model's actual context reduces this to 1–2 calls.
+
+**User's suggestion — "chunk first, find relevant chunk, pass to LLM":**
+This is RAG-for-ingestion. Works well for *querying* (you have a specific question). For *ingestion* it has a chicken-and-egg problem: you don't know which topics to retrieve for before you've read the document. The goal of ingestion is to extract *everything*, not answer a specific question.
+
+**Recommended approach (ranked):**
+1. **Raise `max_tokens` to model-aware sizing** — fixes 99% of cases immediately. No architecture change needed.
+2. **Structure-aware chunking** — split on PDF headings/sections instead of arbitrary token counts. More coherent ideas per chunk. Better for books/technical papers.
+3. **Two-pass outline → targeted extract** — fast cheap LLM produces outline first, then extract ideas per section. Best quality but more complex.
+
+**Uploaded file storage bug fixed alongside this:**
+Files uploaded via `/api/upload` were written to `tempfile.NamedTemporaryFile` and deleted after ingestion. RAG stores the file path — deleting it breaks future RAG lookups. Fix: save to `raw/<source_type_subdir>/filename` permanently.
+
+**Lessons:**
+- Two chunking steps serve different purposes — don't conflate LLM context chunking with RAG retrieval chunking.
+- RAG-for-ingestion (retrieve-then-extract) solves a different problem than full-document knowledge extraction.
+- Chunk size limits must be set relative to the model's actual context window, not a generic conservative default.
+- Uploaded files must persist if any downstream system (RAG) stores their path.
+
+---
+
+## [2026-05-05] RAG Chunking Strategy Reference
+
+**Context:** Evaluating chunking options for the local wiki + PDF RAG system.
+
+**Chunking types and their fit:**
+
+| Type | How it works | Best for |
+|------|-------------|---------|
+| Fixed-size | Split every N chars/tokens | Simple docs, prototypes |
+| Fixed-size + overlap | Fixed-size but repeats some text between chunks | General RAG, reduces lost context |
+| Sentence | Split on sentence boundaries | Clean prose, articles, notes |
+| Paragraph | Split on blank lines | Markdown, docs, essays |
+| Markdown/header | Split on `#`, `##`, `###` headings | Wikis, documentation, Obsidian |
+| Semantic | Group by meaning/topic similarity | Long mixed-topic documents |
+| Recursive | Large boundaries first → smaller: section → paragraph → sentence → tokens | General-purpose RAG |
+| Sliding window | Moving window with overlap | Dense technical text, transcripts |
+| Parent-child | Search small chunks, return larger parent section | Best retrieval quality for docs/wiki |
+| Q&A | Convert sections to generated Q&A pairs | FAQ-style retrieval |
+| Metadata-aware | Chunks include title, tags, source, heading path, dates | Wikis, enterprise docs |
+| Code | Split by functions/classes/modules | Source code RAG |
+| Table-aware | Keep rows + headers + captions together | CSVs, reports, financial docs |
+| Document-layout | Use page layout: headings, columns, figures | PDFs, scanned docs |
+
+**Best strategy for a local wiki RAG system (ranked):**
+1. Markdown/header chunking
+2. Parent-child chunking
+3. Metadata-aware chunking
+4. Recursive chunking as fallback
+
+**Ideal default:**
+- Split by Markdown headings
+- Target 300–800 tokens per chunk
+- 50–150 token overlap
+- Store metadata: page title, file path, tags, heading path, modified date
+- Retrieve small chunks → return parent section/page when answering
+
+**Current implementation (`mymem/rag/pdf_parser.py`):**
+- Paragraph-aware fixed-size sliding window: 800 chars, 80 char overlap
+- Tracks `page_num` and `chunk_index` per chunk
+- **Gap:** No heading-path metadata, no parent-child relationship, no title/tags stored with chunks
+- **Improvement:** Switch to document-layout + metadata-aware for PDFs; markdown/header + parent-child for wiki pages
+
+**Example of ideal chunk metadata:**
+```
+page: "Local RAG System"
+heading_path: "Embedding Models > Quantization"
+file_path: raw/papers/rag-survey.pdf
+tags: [ml, embeddings]
+modified: 2026-05-05
+text: <300-800 token chunk>
+```
