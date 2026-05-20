@@ -167,6 +167,26 @@ Files uploaded via `/api/upload` were written to `tempfile.NamedTemporaryFile` a
 
 ---
 
+## [2026-05-19] Dashboard Layout — Iterative UI Positioning
+
+**Feature requested:** Reorganise dashboard panels multiple times across a session.
+
+**What was learned:**
+- User iterated layout 6+ times in one session: bottom-center → 3-col grid → slide-in panel → button placement
+- Each iteration was a small targeted diff — the right approach. No full rewrites.
+- "Move X to top-right corner" with "outside the card" means a standalone element above the card with `flex justify-end`, not `absolute` positioning.
+- "Like Claude Code desktop" = fixed-width side panel (`w-[420px]`) that slides in via `transition-all duration-300`, with its own scroll, sticky header, and close button — not a modal or overlay.
+- Answer output that "renders whole content" = needs `max-h-[Xvh] overflow-y-auto` to cap growth.
+- `max-w-7xl` on `<main>` was the root cause of blank side margins — upgrade to `max-w-screen-2xl`.
+- `h-[calc(100vh-56px-2rem)]` on the dashboard container (navbar height + padding) gives a full-height panel layout without page scroll.
+
+**Lessons:**
+- For slide-in panels: use `w-0` → `w-[Npx]` with `overflow-hidden` on the outer div; inner div is fixed at `w-[Npx]` so content doesn't reflow during animation.
+- Always check `<main>` max-width before assuming the layout is the problem.
+- Scrollable answer areas need explicit max-height — they won't self-limit inside a flex container.
+
+---
+
 ## [2026-05-05] RAG Chunking Strategy Reference
 
 **Context:** Evaluating chunking options for the local wiki + PDF RAG system.
