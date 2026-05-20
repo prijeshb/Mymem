@@ -244,12 +244,16 @@ async def api_stats(request: Request) -> JSONResponse:
     for e in entries:
         domain_counts[e.domain.value] = domain_counts.get(e.domain.value, 0) + 1
 
+    from mymem.rag.store import count_chunks
+    wiki_chunks = count_chunks(request.app.state.rag_db_path, chunk_type="child")
+
     return JSONResponse({
         "page_count":    len(pages),
         "source_count":  sum(e.source_count for e in entries),
         "orphan_count":  orphans,
         "session_cost":  round(llm_router.session_cost, 4),
         "domain_counts": domain_counts,
+        "wiki_chunks":   wiki_chunks,
     })
 
 

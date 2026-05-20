@@ -110,6 +110,7 @@ export function DashboardPage() {
   const [loadingStats, setLoadingStats] = useState(true);
   const [loadingPages, setLoadingPages] = useState(true);
   const [error, setError]               = useState<string | null>(null);
+  const [wikiOpen, setWikiOpen]         = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useKeyboardShortcut('/', () => inputRef.current?.focus());
@@ -152,10 +153,10 @@ export function DashboardPage() {
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-6">
+    <div className="flex h-[calc(100vh-56px-2rem)] overflow-hidden gap-0">
+
       {/* ── Left sidebar ── */}
-      <aside className="space-y-4">
-        {/* Stats */}
+      <aside className="w-60 shrink-0 flex flex-col gap-4 overflow-y-auto pr-4 py-1">
         <Card>
           <Card.Header>
             <Card.Title className="text-xs font-semibold uppercase tracking-widest text-gray-400">
@@ -180,33 +181,54 @@ export function DashboardPage() {
           </Card.Content>
         </Card>
 
-        {/* Domain heatmap */}
         {stats && Object.keys(stats.domain_counts).length > 0 && (
           <DomainHeatmap counts={stats.domain_counts} />
         )}
-
-
       </aside>
 
-      {/* ── Right main area ── */}
-      <div className="space-y-6">
+      {/* ── Center: Quick Ask ── */}
+      <div className="flex-1 flex flex-col min-w-0 px-4 py-1 overflow-y-auto">
         {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
-        {/* Quick ask */}
-        <Card>
+        {/* Wiki Pages toggle — standalone top-right button */}
+        <div className="flex justify-end mb-2">
+          <button
+            onClick={() => setWikiOpen(o => !o)}
+            title="Toggle Wiki Pages"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
+                       text-gray-400 hover:text-gray-100 hover:bg-gray-700/60
+                       border border-gray-700 bg-gray-800/60 transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+            </svg>
+            Wiki Pages
+            <span className="text-gray-600">({pagesTotal})</span>
+            <svg
+              className={`w-3 h-3 transition-transform duration-200 ${wikiOpen ? 'rotate-90' : '-rotate-90'}`}
+              fill="none" stroke="currentColor" viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+
+        <Card className="flex-1">
           <Card.Header>
             <Card.Title className="text-xs font-semibold uppercase tracking-widest text-gray-400">
               Quick Ask
             </Card.Title>
           </Card.Header>
           <Card.Content className="space-y-3">
+            {/* Input row */}
             <div className="flex gap-2">
               <Input
                 ref={inputRef}
                 value={question}
                 onChange={e => setQuestion(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && ask()}
-                placeholder="Ask anything from your wiki… (press / to focus)"
+                placeholder="Ask anything… (press / to focus)"
                 aria-label="Question"
                 fullWidth
               />
@@ -217,7 +239,7 @@ export function DashboardPage() {
                 className="bg-gray-800 border border-gray-600 rounded-lg px-2 py-2 text-sm text-gray-100
                            focus:outline-hidden focus:ring-2 focus:ring-indigo-400 [color-scheme:dark]"
               >
-                <option value="">All domains</option>
+                <option value="">All</option>
                 {ALL_DOMAINS.map(d => <option key={d} value={d}>{d}</option>)}
               </select>
               <Button
@@ -229,6 +251,7 @@ export function DashboardPage() {
                 Ask
               </Button>
             </div>
+
             <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
               <input
                 type="checkbox"
@@ -239,8 +262,9 @@ export function DashboardPage() {
               Save answer as wiki page
             </label>
 
+            {/* Answer output — scrollable, capped height */}
             {stream.phase !== 'idle' && (
-              <div className="mt-4 p-4 rounded-lg bg-gray-950 border border-gray-800">
+              <div className="p-4 rounded-lg bg-gray-950 border border-gray-800 max-h-[55vh] overflow-y-auto">
                 {stream.phase === 'streaming' && (
                   <p className="text-sm text-gray-200 whitespace-pre-wrap">
                     {stream.text}
@@ -267,100 +291,121 @@ export function DashboardPage() {
             )}
           </Card.Content>
         </Card>
-
-        {/* Pages list */}
-        <Card>
-          <Card.Header className="flex items-center justify-between">
-            <Card.Title className="text-xs font-semibold uppercase tracking-widest text-gray-400">
-              Wiki Pages ({pagesTotal})
-            </Card.Title>
-            <Input
-              value={filter}
-              onChange={e => setFilter(e.target.value)}
-              placeholder="Filter…"
-              aria-label="Filter pages"
-              className="w-48"
-            />
-          </Card.Header>
-          <Card.Content className="p-0">
-            {loadingPages ? <LoadingSpinner /> : (
-              <>
-                <table className="w-full text-sm border-collapse">
-                  <thead>
-                    <tr className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-                      <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 w-full">Title</th>
-                      <th className="text-left px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 whitespace-nowrap">Domain</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pagedEntries.length === 0 ? (
-                      <tr>
-                        <td colSpan={2} className="py-8 text-sm text-center text-gray-500 italic">
-                          No pages yet — ingest some sources!
-                        </td>
-                      </tr>
-                    ) : pagedEntries.map((p, i) => (
-                      <tr
-                        key={p.title}
-                        className={`border-b border-gray-100 dark:border-gray-800 transition-colors
-                          ${i % 2 === 1 ? 'bg-gray-50/60 dark:bg-gray-800/20' : ''}
-                          hover:bg-indigo-50/70 dark:hover:bg-indigo-950/30`}
-                      >
-                        <td className="px-4 py-2.5 max-w-0">
-                          <Link
-                            to={`/wiki/${titleToSlug(p.title)}`}
-                            className="block truncate font-medium text-indigo-600 hover:text-indigo-800
-                                       dark:text-indigo-300 dark:hover:text-indigo-200
-                                       outline-none focus-visible:underline"
-                            title={p.title}
-                          >
-                            {p.title}
-                          </Link>
-                          {p.summary && (
-                            <p className="truncate text-xs text-gray-500 dark:text-gray-500 mt-0.5">{p.summary}</p>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5 whitespace-nowrap">
-                          <DomainBadge domain={p.domain} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-
-                {/* Pagination */}
-                {pagesTotal > PAGES_SIZE && (
-                  <div className="flex items-center justify-between px-4 py-2.5 border-t border-gray-100 dark:border-gray-800">
-                    <span className="text-xs text-gray-500 dark:text-gray-500">
-                      {pagesCurrent * PAGES_SIZE + 1}–{Math.min((pagesCurrent + 1) * PAGES_SIZE, pagesTotal)} of {pagesTotal} pages
-                    </span>
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => setPagesCurrent(p => Math.max(0, p - 1))}
-                        disabled={pagesCurrent === 0}
-                        className="px-2.5 py-1 text-xs rounded border border-gray-300 dark:border-gray-600
-                                   text-gray-500 dark:text-gray-400 disabled:opacity-30
-                                   hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                      >
-                        ‹ Prev
-                      </button>
-                      <button
-                        onClick={() => setPagesCurrent(p => Math.min(totalPagesCount - 1, p + 1))}
-                        disabled={pagesCurrent >= totalPagesCount - 1}
-                        className="px-2.5 py-1 text-xs rounded border border-gray-300 dark:border-gray-600
-                                   text-gray-500 dark:text-gray-400 disabled:opacity-30
-                                   hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-                      >
-                        Next ›
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </Card.Content>
-        </Card>
       </div>
+
+      {/* ── Right slide-in panel: Wiki Pages ── */}
+      <div
+        className={`shrink-0 flex flex-col border-l border-gray-700/60 bg-gray-900
+                    transition-all duration-300 ease-in-out overflow-hidden
+                    ${wikiOpen ? 'w-[420px]' : 'w-0'}`}
+      >
+        <div className="w-[420px] flex flex-col h-full">
+          {/* Panel header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700/60 shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-widest text-gray-400">
+                Wiki Pages
+              </span>
+              <span className="text-xs text-gray-500">({pagesTotal})</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                value={filter}
+                onChange={e => setFilter(e.target.value)}
+                placeholder="Filter…"
+                aria-label="Filter pages"
+                className="w-32"
+              />
+              <button
+                onClick={() => setWikiOpen(false)}
+                className="p-1 rounded hover:bg-gray-700/60 text-gray-400 hover:text-gray-100 transition-colors"
+                aria-label="Close panel"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          {/* Panel body */}
+          <div className="flex-1 overflow-y-auto">
+            {loadingPages ? <LoadingSpinner /> : (
+              <table className="w-full text-sm border-collapse">
+                <thead className="sticky top-0 z-10">
+                  <tr className="bg-gray-800 border-b border-gray-700">
+                    <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-gray-400 w-full">Title</th>
+                    <th className="text-left px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-gray-400 whitespace-nowrap">Domain</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pagedEntries.length === 0 ? (
+                    <tr>
+                      <td colSpan={2} className="py-8 text-sm text-center text-gray-500 italic">
+                        No pages yet — ingest some sources!
+                      </td>
+                    </tr>
+                  ) : pagedEntries.map((p, i) => (
+                    <tr
+                      key={p.title}
+                      className={`border-b border-gray-800 transition-colors
+                        ${i % 2 === 1 ? 'bg-gray-800/20' : ''}
+                        hover:bg-indigo-950/30`}
+                    >
+                      <td className="px-4 py-2.5 max-w-0">
+                        <Link
+                          to={`/wiki/${titleToSlug(p.title)}`}
+                          className="block truncate font-medium text-indigo-300 hover:text-indigo-200
+                                     outline-none focus-visible:underline"
+                          title={p.title}
+                        >
+                          {p.title}
+                        </Link>
+                        {p.summary && (
+                          <p className="truncate text-xs text-gray-500 mt-0.5">{p.summary}</p>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        <DomainBadge domain={p.domain} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {/* Pagination */}
+          {pagesTotal > PAGES_SIZE && (
+            <div className="flex items-center justify-between px-4 py-2.5 border-t border-gray-700/60 shrink-0">
+              <span className="text-xs text-gray-500">
+                {pagesCurrent * PAGES_SIZE + 1}–{Math.min((pagesCurrent + 1) * PAGES_SIZE, pagesTotal)} of {pagesTotal}
+              </span>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setPagesCurrent(p => Math.max(0, p - 1))}
+                  disabled={pagesCurrent === 0}
+                  className="px-2.5 py-1 text-xs rounded border border-gray-600
+                             text-gray-400 disabled:opacity-30
+                             hover:bg-gray-700 transition-colors"
+                >
+                  ‹ Prev
+                </button>
+                <button
+                  onClick={() => setPagesCurrent(p => Math.min(totalPagesCount - 1, p + 1))}
+                  disabled={pagesCurrent >= totalPagesCount - 1}
+                  className="px-2.5 py-1 text-xs rounded border border-gray-600
+                             text-gray-400 disabled:opacity-30
+                             hover:bg-gray-700 transition-colors"
+                >
+                  Next ›
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
     </div>
   );
 }

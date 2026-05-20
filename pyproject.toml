@@ -30,6 +30,9 @@ dependencies = [
     "pypdf==6.9.2",            # PDF text extraction
     "beautifulsoup4==4.14.3",  # HTML → text fallback
 
+    # RAG chunking
+    "langchain-text-splitters>=0.3.0",  # MarkdownHeaderTextSplitter + RecursiveCharacterTextSplitter
+
     # Search
     "rank-bm25==0.2.2",        # BM25 fallback when embeddings not available
     "ddgs>=9.0",               # DuckDuckGo web search for related links

@@ -12,7 +12,7 @@ export function App() {
   return (
     <>
       <Navbar />
-      <main id="main-content" className="mx-auto max-w-7xl px-4 py-6">
+      <main id="main-content" className="mx-auto max-w-screen-2xl px-4 py-4">
         <Routes>
           <Route path="/"           element={<DashboardPage />} />
           <Route path="/search"     element={<SearchPage />} />

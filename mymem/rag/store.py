@@ -35,6 +35,13 @@ class RagChunk:
     text: str
     char_count: int
     created_at: str
+    # Wiki-only fields (None for PDF chunks)
+    heading_path: str | None = None
+    parent_text:  str | None = None
+    chunk_type:   str | None = None
+    page_title:   str | None = None
+    domain:       str | None = None
+    tags:         str | None = None
 
 
 @dataclass(frozen=True)
@@ -56,7 +63,7 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 
 
 def init_db(db_path: Path) -> None:
-    """Create rag_chunks and rag_embeddings tables if they don't exist."""
+    """Create rag_chunks and rag_embeddings tables if they don't exist, and migrate."""
     conn = _connect(db_path)
     try:
         with conn:
@@ -69,7 +76,13 @@ def init_db(db_path: Path) -> None:
                     page_num    INTEGER,
                     text        TEXT    NOT NULL,
                     char_count  INTEGER NOT NULL,
-                    created_at  TEXT    NOT NULL
+                    created_at  TEXT    NOT NULL,
+                    heading_path TEXT,
+                    parent_text  TEXT,
+                    chunk_type   TEXT DEFAULT 'child',
+                    page_title   TEXT,
+                    domain       TEXT,
+                    tags         TEXT
                 )
             """)
             conn.execute(f"""
@@ -78,6 +91,19 @@ def init_db(db_path: Path) -> None:
                     embedding FLOAT[{EMBED_DIM}]
                 )
             """)
+            # Migration: add new columns to existing databases
+            for alter in [
+                "ALTER TABLE rag_chunks ADD COLUMN heading_path TEXT",
+                "ALTER TABLE rag_chunks ADD COLUMN parent_text  TEXT",
+                "ALTER TABLE rag_chunks ADD COLUMN chunk_type   TEXT DEFAULT 'child'",
+                "ALTER TABLE rag_chunks ADD COLUMN page_title   TEXT",
+                "ALTER TABLE rag_chunks ADD COLUMN domain       TEXT",
+                "ALTER TABLE rag_chunks ADD COLUMN tags         TEXT",
+            ]:
+                try:
+                    conn.execute(alter)
+                except sqlite3.OperationalError:
+                    pass  # column already exists
     finally:
         conn.close()
 
@@ -118,8 +144,10 @@ def insert_chunks(
                     """
                     INSERT INTO rag_chunks
                         (source_path, source_slug, chunk_index, page_num,
-                         text, char_count, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                         text, char_count, created_at,
+                         heading_path, parent_text, chunk_type,
+                         page_title, domain, tags)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         chunk["source_path"],
@@ -129,6 +157,12 @@ def insert_chunks(
                         chunk["text"],
                         len(str(chunk["text"])),
                         now,
+                        chunk.get("heading_path"),
+                        chunk.get("parent_text"),
+                        chunk.get("chunk_type", "child"),
+                        chunk.get("page_title"),
+                        chunk.get("domain"),
+                        chunk.get("tags"),
                     ),
                 )
                 chunk_id = cur.lastrowid
@@ -152,7 +186,9 @@ def search_similar(
             """
             SELECT e.chunk_id, e.distance,
                    c.source_path, c.source_slug, c.chunk_index,
-                   c.page_num, c.text, c.char_count, c.created_at
+                   c.page_num, c.text, c.char_count, c.created_at,
+                   c.heading_path, c.parent_text, c.chunk_type,
+                   c.page_title, c.domain, c.tags
             FROM rag_embeddings e
             JOIN rag_chunks c ON c.id = e.chunk_id
             WHERE e.embedding MATCH ?
@@ -173,11 +209,34 @@ def search_similar(
                     text=r["text"],
                     char_count=r["char_count"],
                     created_at=r["created_at"],
+                    heading_path=r["heading_path"],
+                    parent_text=r["parent_text"],
+                    chunk_type=r["chunk_type"],
+                    page_title=r["page_title"],
+                    domain=r["domain"],
+                    tags=r["tags"],
                 ),
                 distance=r["distance"],
             )
             for r in rows
         ]
+    finally:
+        conn.close()
+
+
+def count_chunks(db_path: Path, chunk_type: str | None = None) -> int:
+    """Return total chunk count, optionally filtered by chunk_type."""
+    if not db_path.exists():
+        return 0
+    conn = _connect(db_path)
+    try:
+        if chunk_type is not None:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM rag_chunks WHERE chunk_type = ?", (chunk_type,)
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT COUNT(*) FROM rag_chunks").fetchone()
+        return int(row[0]) if row else 0
     finally:
         conn.close()
 

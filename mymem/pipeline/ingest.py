@@ -24,6 +24,8 @@ from typing import Callable, Awaitable
 from mymem.observability.logger import get_logger, set_run_id
 from mymem.pipeline.router import ModelRouter
 from mymem.pipeline.splitter import ChunkSplitter, merge_prompt, merge_system_prompt
+
+splitter = ChunkSplitter(max_tokens=6000)
 from mymem.security.sanitize import sanitize_for_prompt
 from mymem.security.scanner import has_high_severity_secret
 from mymem.wiki.index import IndexManager
@@ -585,6 +587,10 @@ async def ingest_source(
         write_page(page)
         log.debug("Page written", path=str(page_path))
 
+        # Async best-effort wiki RAG indexing (fire-and-forget; never blocks ingest)
+        if db_path:
+            asyncio.ensure_future(_rag_index_wiki(page_path, db_path=db_path))
+
         # Update index
         index_mgr.upsert(IndexEntry(
             title=idea_title,
@@ -652,6 +658,28 @@ async def _rag_index_pdf(source: str, *, db_path: Path | None) -> int:
     except Exception as exc:
         log.warning("RAG indexing raised unexpectedly", source=source, error=str(exc))
         return 0
+
+
+async def _rag_index_wiki(page_path: Path, *, db_path: Path | None) -> None:
+    """Index a wiki page into the RAG vector store (best-effort; never raises)."""
+    try:
+        from mymem.config import get_settings
+        from mymem.rag.ingest import ingest_wiki_page
+
+        settings = get_settings()
+        rag_db = db_path.parent / "rag.db" if db_path else Path("data/rag.db")
+        result = await ingest_wiki_page(
+            page_path,
+            db_path=rag_db,
+            base_url=settings.ollama.base_url,
+            force=True,
+        )
+        if result.ok:
+            log.info("Wiki RAG indexed", path=str(page_path), chunks=result.chunk_count)
+        elif not result.skipped:
+            log.warning("Wiki RAG index failed", path=str(page_path), error=result.error)
+    except Exception as exc:
+        log.warning("Wiki RAG indexing raised unexpectedly", path=str(page_path), error=str(exc))
 
 
 async def _rag_index_text(source_name: str, text: str, *, db_path: Path | None) -> None:

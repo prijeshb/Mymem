@@ -17,7 +17,7 @@ from pathlib import Path
 from mymem.observability.logger import get_logger
 from mymem.rag.embedder import embed_texts
 from mymem.rag.pdf_parser import parse_pdf
-from mymem.rag.store import init_db, insert_chunks, source_exists
+from mymem.rag.store import delete_source, init_db, insert_chunks, source_exists
 from mymem.wiki.types import slugify
 
 log = get_logger(__name__)
@@ -176,3 +176,75 @@ async def ingest_text_chunks(
 
     log.info("RAG: text indexed OK", source=source_id, chunks=len(text_chunks))
     return RagIngestResult(source_path=source_id, chunk_count=len(text_chunks))
+
+
+async def ingest_wiki_page(
+    page_path: Path,
+    *,
+    db_path: Path,
+    base_url: str = "http://localhost:11434",
+    force: bool = False,
+) -> RagIngestResult:
+    """
+    Index a wiki markdown page into the RAG vector store.
+
+    Uses parent-child chunking: small child chunks are embedded for precision;
+    the full heading section (parent_text) is stored for LLM context at query time.
+
+    Args:
+        page_path: Path to the .md wiki page.
+        db_path:   Path to the sqlite-vec store.
+        base_url:  Ollama server URL.
+        force:     Delete existing chunks and re-index (use when page content changes).
+    """
+    from mymem.rag.wiki_chunker import chunk_wiki_page
+
+    source_str = str(page_path.resolve())
+    init_db(db_path)
+
+    if force:
+        deleted = delete_source(db_path, source_str)
+        if deleted > 0:
+            log.info("RAG: wiki re-index — cleared old chunks", source=source_str, deleted=deleted)
+    elif source_exists(db_path, source_str):
+        log.info("RAG: wiki already indexed — skipping", source=source_str)
+        return RagIngestResult(source_path=source_str, skipped=True, skip_reason="already indexed")
+
+    wiki_chunks = chunk_wiki_page(page_path)
+    if not wiki_chunks:
+        return RagIngestResult(
+            source_path=source_str,
+            error="No chunks produced from wiki page",
+        )
+
+    embed_texts_input = [c.embed_text for c in wiki_chunks]
+    log.info("RAG: embedding wiki page", source=source_str, chunks=len(embed_texts_input))
+    try:
+        embeddings = await embed_texts(embed_texts_input, base_url=base_url)
+    except Exception as exc:
+        log.error("RAG: wiki embedding failed", source=source_str, error=str(exc))
+        return RagIngestResult(source_path=source_str, error=f"Embedding failed: {exc}")
+
+    chunk_dicts: list[dict[str, object]] = [
+        {
+            "source_path":  c.source_path,
+            "source_slug":  c.source_slug,
+            "chunk_index":  c.chunk_index,
+            "text":         c.text,
+            "parent_text":  c.parent_text,
+            "heading_path": c.heading_path,
+            "chunk_type":   c.chunk_type,
+            "page_title":   c.page_title,
+            "domain":       c.domain,
+            "tags":         c.tags,
+        }
+        for c in wiki_chunks
+    ]
+    try:
+        insert_chunks(db_path, chunk_dicts, embeddings)
+    except Exception as exc:
+        log.error("RAG: wiki store insert failed", source=source_str, error=str(exc))
+        return RagIngestResult(source_path=source_str, error=f"Store insert failed: {exc}")
+
+    log.info("RAG: wiki indexed OK", source=source_str, chunks=len(wiki_chunks))
+    return RagIngestResult(source_path=source_str, chunk_count=len(wiki_chunks))
