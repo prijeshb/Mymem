@@ -1,0 +1,29 @@
+# Retrieval evaluation test cases
+# Edit this file to add ground-truth (query, expected wiki page slug) pairs.
+#
+# expected_slug must match the filename stem in wiki/ (e.g. "multi-head-attention"
+# for wiki/multi-head-attention.md).
+#
+# domain is optional — add it to restrict retrieval to pages with that domain tag.
+#
+# Add real cases from your own wiki to get meaningful precision@k / MRR / UDCG scores.
+
+- query: "What is multi-head attention?"
+  expected_slug: "multi-head-attention"
+  domain: "tech"
+
+- query: "How does the transformer architecture work?"
+  expected_slug: "transformer-architecture"
+  domain: "tech"
+
+- query: "What is stoic philosophy?"
+  expected_slug: "stoic-philosophy"
+  domain: "spiritual"
+
+- query: "How to calculate compound interest?"
+  expected_slug: "compound-interest"
+  domain: "finance"
+
+- query: "What is retrieval augmented generation?"
+  expected_slug: "retrieval-augmented-generation"
+  domain: "tech"
