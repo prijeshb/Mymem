@@ -1,11 +1,18 @@
-import { Spinner } from '@heroui/react';
 import { useEffect, useState } from 'react';
 
 const LOADING_WORDS = [
-  'Considering', 'Deliberating', 'Crafting',   'Synthesizing',
-  'Reasoning',   'Brewing',      'Deciphering', 'Composing',
-  'Analyzing',   'Weaving',      'Pondering',   'Distilling',
-  'Connecting',  'Cerebrating',  'Imagining',   'Retrieving',
+  'Doing computer things…',
+  'Herding electrons…',
+  'Asking nicely…',
+  'Untangling spaghetti…',
+  'Summoning data spirits…',
+  'Counting to infinity (almost)…',
+  'Blaming the server…',
+  'Definitely not sleeping…',
+  'Buffering existentially…',
+  'Warming up the hamsters…',
+  'Negotiating with the database…',
+  'Loading… loading… loaded?…',
 ];
 
 interface Props {
@@ -13,6 +20,12 @@ interface Props {
   label?: string;
   className?: string;
 }
+
+const RING: Record<string, string> = {
+  sm: 'w-5 h-5 border-2',
+  md: 'w-7 h-7 border-2',
+  lg: 'w-10 h-10 border-[3px]',
+};
 
 export function LoadingSpinner({ size = 'md', label, className = '' }: Props) {
   const [index, setIndex] = useState(() => Math.floor(Math.random() * LOADING_WORDS.length));
@@ -30,7 +43,7 @@ export function LoadingSpinner({ size = 'md', label, className = '' }: Props) {
     return () => clearInterval(id);
   }, [label]);
 
-  const text = label ?? `${LOADING_WORDS[index]}…`;
+  const text = label ?? LOADING_WORDS[index];
 
   return (
     <div
@@ -39,8 +52,14 @@ export function LoadingSpinner({ size = 'md', label, className = '' }: Props) {
       aria-live="polite"
       aria-label={text}
     >
-      <Spinner size={size} color="current" />
-      <span className={`loading-word text-sm font-medium text-[#2563EB] dark:text-[#6ea8fe] ${visible ? 'loading-word--in' : ''}`}>
+      <div
+        className={`${RING[size]} rounded-full border-gray-600 border-t-sky-400 animate-spin`}
+      />
+      <span
+        className={`text-sm font-medium text-sky-400 transition-opacity duration-200 ${
+          visible ? 'opacity-100' : 'opacity-0'
+        }`}
+      >
         {text}
       </span>
     </div>

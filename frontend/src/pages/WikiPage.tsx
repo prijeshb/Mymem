@@ -220,9 +220,9 @@ export function WikiPage() {
       {/* ── Main content: Article + Related Web Articles ── */}
       <div className="min-w-0">
         {/* Page header */}
-        <div className="mb-6 pb-4 border-b border-gray-200 dark:border-gray-700">
+        <div className="mb-8 pb-5 border-b border-gray-200 dark:border-gray-700/60">
           <div className="flex items-start gap-3 mb-3 flex-wrap">
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 leading-tight flex-1">
+            <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-50 leading-tight flex-1 tracking-tight">
               {page.title}
             </h1>
             {page.archived && (
@@ -342,11 +342,12 @@ export function WikiPage() {
               {page.tags.map(t => (
                 <span
                   key={t}
-                  className="px-2 py-0.5 rounded-full text-xs font-medium
-                             bg-gray-100 text-gray-600
-                             dark:bg-gray-800 dark:text-gray-300"
+                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium
+                             bg-indigo-50 text-indigo-700 border border-indigo-200/60
+                             dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800/50"
                 >
-                  #{t}
+                  <span className="w-1 h-1 rounded-full bg-indigo-400 dark:bg-indigo-500" />
+                  {t}
                 </span>
               ))}
               <Button
@@ -354,17 +355,24 @@ export function WikiPage() {
                 size="sm"
                 onPress={startEdit}
                 aria-label="Edit tags and domain"
-                className="border-dashed text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                className="border-dashed text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
               >
                 + edit
               </Button>
             </div>
           )}
 
-          <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
-            Created {page.created} · Updated {page.updated}
-            {page.sources.length > 0 && ` · Sources: ${page.sources.join(', ')}`}
-          </p>
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-2.5 text-xs text-gray-400 dark:text-gray-600">
+            <span>Created {page.created}</span>
+            <span className="text-gray-300 dark:text-gray-700">·</span>
+            <span>Updated {page.updated}</span>
+            {page.sources.length > 0 && (
+              <>
+                <span className="text-gray-300 dark:text-gray-700">·</span>
+                <span>{page.sources.length} {page.sources.length === 1 ? 'source' : 'sources'}</span>
+              </>
+            )}
+          </div>
 
           {actionError && <p className="text-xs text-red-500 mt-1">{actionError}</p>}
           {confirmDelete && (
@@ -400,8 +408,23 @@ export function WikiPage() {
           <article
             ref={articleRef}
             className="prose dark:prose-invert prose-sm max-w-none
-                       prose-a:text-blue-600 dark:prose-a:text-indigo-400
-                       dark:prose-pre:bg-gray-900 dark:prose-pre:border dark:prose-pre:border-gray-700"
+                       prose-p:leading-7 prose-p:text-gray-700 dark:prose-p:text-gray-300
+                       prose-headings:font-semibold prose-headings:tracking-tight
+                       prose-h2:text-xl prose-h2:mt-8 prose-h2:mb-3
+                       prose-h3:text-base prose-h3:mt-6 prose-h3:mb-2
+                       prose-a:text-indigo-600 dark:prose-a:text-indigo-400
+                       prose-a:no-underline prose-a:font-medium hover:prose-a:underline
+                       prose-strong:text-gray-900 dark:prose-strong:text-gray-100
+                       prose-code:text-indigo-700 dark:prose-code:text-indigo-300
+                       prose-code:bg-indigo-50 dark:prose-code:bg-indigo-950/40
+                       prose-code:rounded prose-code:px-1.5 prose-code:py-0.5
+                       prose-code:text-[0.8em] prose-code:font-normal
+                       prose-pre:bg-gray-950 prose-pre:border prose-pre:border-gray-800
+                       prose-pre:rounded-xl prose-pre:shadow-md
+                       prose-blockquote:border-l-indigo-400 prose-blockquote:text-gray-500
+                       dark:prose-blockquote:text-gray-400
+                       prose-li:text-gray-700 dark:prose-li:text-gray-300
+                       prose-li:marker:text-indigo-400"
             dangerouslySetInnerHTML={{ __html: renderBody(page.body) }}
             onClick={e => {
               const a = (e.target as HTMLElement).closest('a.wikilink.broken');

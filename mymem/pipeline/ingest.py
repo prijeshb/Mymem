@@ -24,6 +24,8 @@ from typing import Callable, Awaitable
 from mymem.observability.logger import get_logger, set_run_id
 from mymem.pipeline.router import ModelRouter
 from mymem.pipeline.splitter import ChunkSplitter, merge_prompt, merge_system_prompt
+
+splitter = ChunkSplitter(max_tokens=1024)
 from mymem.security.sanitize import sanitize_for_prompt
 from mymem.security.scanner import has_high_severity_secret
 from mymem.wiki.index import IndexManager
@@ -66,6 +68,8 @@ class IngestResult:
     chunk_count:   int = 1
     skipped:       bool = False
     skip_reason:   str = ""
+    rag_only:      bool = False
+    rag_chunks:    int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -465,8 +469,22 @@ async def ingest_source(
             patterns=ingest_risk.matched_patterns,
         )
 
-    # 3. Extract ideas (split if needed)
-    splitter = ChunkSplitter(max_tokens=6000)
+    # 3a. Local PDFs — skip LLM extraction entirely; just RAG-index for search
+    is_local_pdf = (
+        not source.startswith(("http://", "https://"))
+        and Path(source).suffix.lower() == ".pdf"
+    )
+    if is_local_pdf:
+        rag_chunks = await _rag_index_pdf(source, db_path=db_path)
+        log.info("PDF RAG-indexed (search only, no wiki extraction)",
+                 source=source_name, chunks=rag_chunks)
+        return IngestResult(
+            source_path=source,
+            rag_only=True,
+            rag_chunks=rag_chunks,
+        )
+
+    # 3b. Extract ideas (split if needed)
     chunks = splitter.split(source_text)
     chunk_count = len(chunks)
     log.info("Extracting ideas", source=source_name, chunks=chunk_count)
@@ -569,6 +587,10 @@ async def ingest_source(
         write_page(page)
         log.debug("Page written", path=str(page_path))
 
+        # Async best-effort wiki RAG indexing (fire-and-forget; never blocks ingest)
+        if db_path:
+            asyncio.ensure_future(_rag_index_wiki(page_path, db_path=db_path))
+
         # Update index
         index_mgr.upsert(IndexEntry(
             title=idea_title,
@@ -600,29 +622,23 @@ async def ingest_source(
         chunks=chunk_count, cost=f"${router.session_cost:.4f}",
     )
 
-    # Record quality analytics for YouTube ingests
-    if db_path and (source_type == "youtube" or _is_youtube_url(source)):
-        _record_youtube_analytics(
+    # Record quality analytics for all ingests
+    if db_path:
+        _record_ingest_analytics(
             db_path=db_path,
+            source_type=source_type,
+            source=source,
             source_text=source_text,
             all_ideas=all_ideas,
             result=result,
             wiki_dir=wiki_dir,
         )
 
-    # RAG indexing for local PDF sources
-    if (
-        source_type in ("pdf", "paper")
-        and not source.startswith(("http://", "https://"))
-        and Path(source).suffix.lower() == ".pdf"
-    ):
-        await _rag_index_pdf(source, db_path=db_path)
-
     return result
 
 
-async def _rag_index_pdf(source: str, *, db_path: Path | None) -> None:
-    """Index a local PDF into the RAG vector store (best-effort; never raises)."""
+async def _rag_index_pdf(source: str, *, db_path: Path | None) -> int:
+    """Index a local PDF into the RAG vector store. Returns chunk count (0 on failure)."""
     try:
         from mymem.config import get_settings
         from mymem.rag.ingest import ingest_pdf
@@ -640,19 +656,70 @@ async def _rag_index_pdf(source: str, *, db_path: Path | None) -> None:
             log.info("RAG index: complete", source=source, chunks=rag_result.chunk_count)
         else:
             log.warning("RAG index: failed", source=source, error=rag_result.error)
+        return rag_result.chunk_count if rag_result.ok else 0
     except Exception as exc:
-        log.warning("RAG indexing raised unexpectedly — continuing", source=source, error=str(exc))
+        log.warning("RAG indexing raised unexpectedly", source=source, error=str(exc))
+        return 0
 
 
-def _record_youtube_analytics(
+async def _rag_index_wiki(page_path: Path, *, db_path: Path | None) -> None:
+    """Index a wiki page into the RAG vector store (best-effort; never raises)."""
+    try:
+        from mymem.config import get_settings
+        from mymem.rag.ingest import ingest_wiki_page
+
+        settings = get_settings()
+        rag_db = db_path.parent / "rag.db" if db_path else Path("data/rag.db")
+        result = await ingest_wiki_page(
+            page_path,
+            db_path=rag_db,
+            base_url=settings.ollama.base_url,
+            force=True,
+        )
+        if result.ok:
+            log.info("Wiki RAG indexed", path=str(page_path), chunks=result.chunk_count)
+        elif not result.skipped:
+            log.warning("Wiki RAG index failed", path=str(page_path), error=result.error)
+    except Exception as exc:
+        log.warning("Wiki RAG indexing raised unexpectedly", path=str(page_path), error=str(exc))
+
+
+async def _rag_index_text(source_name: str, text: str, *, db_path: Path | None) -> None:
+    """Index raw text into the RAG vector store (best-effort; never raises)."""
+    try:
+        from mymem.config import get_settings
+        from mymem.rag.ingest import ingest_text_chunks
+
+        settings = get_settings()
+        rag_db = db_path.parent / "rag.db" if db_path else Path("data/rag.db")
+        rag_result = await ingest_text_chunks(
+            text,
+            source_id=source_name,
+            db_path=rag_db,
+            base_url=settings.ollama.base_url,
+        )
+        if rag_result.skipped:
+            log.info("RAG index: already indexed", source=source_name, reason=rag_result.skip_reason)
+        elif rag_result.ok:
+            log.info("RAG index: complete", source=source_name, chunks=rag_result.chunk_count)
+        else:
+            log.warning("RAG index: failed", source=source_name, error=rag_result.error)
+    except Exception as exc:
+        log.warning("RAG text indexing raised unexpectedly — continuing", source=source_name, error=str(exc))
+
+
+def _record_ingest_analytics(
     *,
     db_path: Path,
+    source_type: str,
+    source: str,
     source_text: str,
     all_ideas: list[dict[str, object]],
     result: "IngestResult",
     wiki_dir: Path,
 ) -> None:
-    """Measure quality of generated pages and persist analytics record."""
+    """Measure quality of generated pages and persist analytics record for all source types."""
+    from mymem.evals.metrics import duplicate_rate
     from mymem.observability.ingest_analytics import record_ingest
 
     all_touched = result.pages_written + result.pages_updated
@@ -670,16 +737,24 @@ def _record_youtube_analytics(
     avg_chars = sum(page_chars) / len(page_chars) if page_chars else 0.0
     avg_links = sum(page_wikilinks) / len(page_wikilinks) if page_wikilinks else 0.0
 
+    # Measure duplicate ideas across chunks
+    idea_summaries = [str(idea.get("summary", "")) for idea in all_ideas if idea.get("summary")]
+    dup_rate = duplicate_rate(idea_summaries) if len(idea_summaries) >= 2 else 0.0
+
+    is_youtube = source_type == "youtube" or _is_youtube_url(source)
+
     record_ingest(
         db_path,
-        source_type="youtube",
-        metadata_enriched="[YouTube Video — ID:" in source_text,
+        source_type=source_type,
+        metadata_enriched=is_youtube and "[YouTube Video — ID:" in source_text,
         source_chars=len(source_text),
         concepts_extracted=len(all_ideas),
         pages_written=len(result.pages_written),
         pages_updated=len(result.pages_updated),
         avg_page_chars=avg_chars,
         avg_wikilinks=avg_links,
+        chunk_count=result.chunk_count,
+        idea_duplicate_rate=round(dup_rate, 3),
     )
 
 

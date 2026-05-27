@@ -1,0 +1,7 @@
+# Pinned retrieval regression cases (optional override).
+# If this file is empty, the eval auto-generates self-supervised cases from the wiki.
+#
+# Format:
+#   - query: "What is multi-head attention?"
+#     expected_slug: "multi-head-attention"   # must match a real wiki/ slug
+#     domain: "tech"                           # optional domain filter

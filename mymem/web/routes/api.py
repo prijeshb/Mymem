@@ -19,22 +19,22 @@ from pathlib import Path
 from typing import AsyncIterator
 
 import shutil
-import tempfile
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from mymem.observability.logger import get_logger
 from mymem.pipeline.ingest import ingest_source
-from mymem.pipeline.introspect import introspect, top_interests
+from mymem.pipeline.introspect import introspect, top_interests, generate_questions, generate_digest
 from mymem.pipeline.lint import format_lint_report, lint_wiki
 from mymem.pipeline.query import query_wiki
 from mymem.wiki.index import IndexManager
-from mymem.wiki.log import WikiLog
 from mymem.wiki.page import list_pages
 from mymem.wiki.types import TagDomain
 
 router = APIRouter()
+log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +159,8 @@ async def api_query(req: QueryRequest, request: Request) -> StreamingResponse:
             yield f"data: {done}\n\n"
 
         except Exception as exc:
-            err = json.dumps({"type": "error", "message": str(exc)})
+            log.exception("query stream failed", error=str(exc))
+            err = json.dumps({"type": "error", "message": "Query failed. Please try again."})
             yield f"data: {err}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -246,12 +247,16 @@ async def api_stats(request: Request) -> JSONResponse:
     for e in entries:
         domain_counts[e.domain.value] = domain_counts.get(e.domain.value, 0) + 1
 
+    from mymem.rag.store import count_chunks
+    wiki_chunks = count_chunks(request.app.state.rag_db_path, chunk_type="child")
+
     return JSONResponse({
         "page_count":    len(pages),
         "source_count":  sum(e.source_count for e in entries),
         "orphan_count":  orphans,
         "session_cost":  round(llm_router.session_cost, 4),
         "domain_counts": domain_counts,
+        "wiki_chunks":   wiki_chunks,
     })
 
 
@@ -315,12 +320,24 @@ async def api_ingest(req: IngestRequest, request: Request) -> JSONResponse:
             "chunk_count":   result.chunk_count,
         })
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        log.exception("ingest failed", source=req.source, error=str(exc))
+        raise HTTPException(status_code=500, detail="Ingest failed. Check server logs for details.")
 
 
 # ---------------------------------------------------------------------------
 # POST /api/upload  (multipart file upload → ingest)
 # ---------------------------------------------------------------------------
+
+_SOURCE_TYPE_SUBDIR: dict[str, str] = {
+    "paper":     "papers",
+    "book":      "books",
+    "article":   "articles",
+    "dataset":   "datasets",
+    "repo":      "repos",
+    "image":     "images",
+    "note":      "notes",
+}
+
 
 @router.post("/upload")
 async def api_upload(
@@ -334,29 +351,42 @@ async def api_upload(
     index_path = request.app.state.index_path
     log_path   = request.app.state.log_path
     llm_router = request.app.state.router
+    settings   = request.app.state.settings
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
 
-    suffix = Path(file.filename or "upload").suffix or ".txt"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = tmp.name
+    # Save to raw/<subdir>/ so PDFs persist for RAG indexing
+    raw_root = Path(settings.paths.raw).resolve()
+    subdir   = _SOURCE_TYPE_SUBDIR.get(source_type, "misc")
+    dest_dir = raw_root / subdir
+    dest_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        result = await ingest_source(
-            tmp_path,
-            wiki_dir=wiki_dir,
-            index_path=index_path,
-            log_path=log_path,
-            router=llm_router,
-            source_type=source_type,
-            tags=tag_list,
-            domain=domain,
-            max_concepts=request.app.state.settings.pipeline.max_concepts,
-            db_path=request.app.state.db_path,
-        )
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
+    safe_name = Path(file.filename or "upload").name.replace(" ", "_")
+    dest_path = dest_dir / safe_name
+    # Avoid silent overwrites — append suffix if file already exists
+    if dest_path.exists():
+        stem   = dest_path.stem
+        suffix = dest_path.suffix
+        counter = 1
+        while dest_path.exists():
+            dest_path = dest_dir / f"{stem}_{counter}{suffix}"
+            counter += 1
+
+    with dest_path.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    result = await ingest_source(
+        str(dest_path),
+        wiki_dir=wiki_dir,
+        index_path=index_path,
+        log_path=log_path,
+        router=llm_router,
+        source_type=source_type,
+        tags=tag_list,
+        domain=domain,
+        max_concepts=settings.pipeline.max_concepts,
+        db_path=request.app.state.db_path,
+    )
 
     return JSONResponse({
         "skipped":       result.skipped,
@@ -364,6 +394,9 @@ async def api_upload(
         "pages_written": result.pages_written,
         "pages_updated": result.pages_updated,
         "chunk_count":   result.chunk_count,
+        "rag_only":      result.rag_only,
+        "rag_chunks":    result.rag_chunks,
+        "saved_to":      str(dest_path.relative_to(Path.cwd()) if dest_path.is_relative_to(Path.cwd()) else dest_path),
     })
 
 
@@ -402,7 +435,8 @@ async def api_ingest_text(req: IngestTextRequest, request: Request) -> JSONRespo
             db_path=request.app.state.db_path,
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        log.exception("upload ingest failed", error=str(exc))
+        raise HTTPException(status_code=500, detail="Upload processing failed. Check server logs for details.")
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
@@ -658,53 +692,6 @@ async def api_archived(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# GET /api/log  (recent wiki log entries)
-# ---------------------------------------------------------------------------
-
-@router.get("/log")
-async def api_log(request: Request, limit: int = 15) -> JSONResponse:
-    log_path = request.app.state.log_path
-    wiki_log = WikiLog(log_path)
-    entries  = wiki_log.recent(limit)
-    return JSONResponse([
-        {
-            "ts":            e.timestamp.isoformat(),
-            "operation":     e.operation.value,
-            "description":   e.description,
-            "affected_pages": list(e.affected_pages),
-        }
-        for e in entries
-    ])
-
-
-# ---------------------------------------------------------------------------
-# GET /api/heatmap  (16-week daily activity counts)
-# ---------------------------------------------------------------------------
-
-@router.get("/heatmap")
-async def api_heatmap(request: Request) -> JSONResponse:
-    from datetime import date, timedelta
-    log_path = request.app.state.log_path
-    wiki_log = WikiLog(log_path)
-
-    today     = date.today()
-    start_day = today - timedelta(days=111)
-    day_counts: dict[str, int] = {}
-    for entry in wiki_log.load():
-        d = entry.timestamp.date()
-        if d >= start_day:
-            key = d.isoformat()
-            day_counts[key] = day_counts.get(key, 0) + 1
-
-    days = []
-    for i in range(112):
-        d = start_day + timedelta(days=i)
-        days.append({"date": d.isoformat(), "count": day_counts.get(d.isoformat(), 0)})
-
-    return JSONResponse({"days": days})
-
-
-# ---------------------------------------------------------------------------
 # GET /api/lint
 # ---------------------------------------------------------------------------
 
@@ -805,6 +792,64 @@ async def api_introspect(
 
 
 # ---------------------------------------------------------------------------
+# GET /api/introspect/questions
+# ---------------------------------------------------------------------------
+
+@router.get("/introspect/questions")
+async def api_introspect_questions(
+    request: Request,
+    n: int = 5,
+) -> JSONResponse:
+    wiki_dir   = request.app.state.wiki_dir
+    llm_router = request.app.state.router
+
+    questions = await generate_questions(wiki_dir=wiki_dir, router=llm_router, n_pages=n)
+    return JSONResponse([
+        {
+            "question":   q.question,
+            "page_title": q.page_title,
+            "hint":       q.hint,
+            "difficulty": q.difficulty,
+        }
+        for q in questions
+    ])
+
+
+# ---------------------------------------------------------------------------
+# GET /api/introspect/digest
+# ---------------------------------------------------------------------------
+
+@router.get("/introspect/digest")
+async def api_introspect_digest(
+    request:    Request,
+    period:     int = 7,
+) -> JSONResponse:
+    wiki_dir     = request.app.state.wiki_dir
+    log_path     = request.app.state.log_path
+    curiosity_db = request.app.state.curiosity_db
+    llm_router   = request.app.state.router
+
+    result = await generate_digest(
+        wiki_dir=wiki_dir,
+        log_path=log_path,
+        curiosity_db=curiosity_db,
+        router=llm_router,
+        period_days=period,
+    )
+    return JSONResponse({
+        "period_days":          result.period_days,
+        "date_range":           result.date_range,
+        "pages_active":         result.pages_active,
+        "queries_made":         result.queries_made,
+        "themes":               [{"theme": t.theme, "pages": t.pages, "insight": t.insight} for t in result.themes],
+        "emerging_connections": result.emerging_connections,
+        "knowledge_gaps":       result.knowledge_gaps,
+        "serendipity":          result.serendipity,
+        "open_question":        result.open_question,
+    })
+
+
+# ---------------------------------------------------------------------------
 # GET /api/curiosity
 # ---------------------------------------------------------------------------
 
@@ -856,6 +901,20 @@ async def api_analytics_youtube(request: Request) -> JSONResponse:
         },
         "recent": recent,
     })
+
+
+# ---------------------------------------------------------------------------
+# GET /api/evals/summary
+# ---------------------------------------------------------------------------
+
+@router.get("/evals/summary")
+async def api_evals_summary(request: Request) -> JSONResponse:
+    """Latest eval run summary for each eval type, read from data/evals.db."""
+    from mymem.evals.store import latest_summary
+
+    db_path = request.app.state.db_path
+    evals_db = db_path.parent / "evals.db"
+    return JSONResponse(latest_summary(evals_db))
 
 
 @router.get("/curiosity")

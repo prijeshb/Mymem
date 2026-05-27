@@ -16,7 +16,7 @@ import typer
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import Progress, TextColumn
 from rich.table import Table
 
 app     = typer.Typer(name="mymem", help="Personal LLM-powered knowledge base.", add_completion=False)
@@ -84,7 +84,7 @@ def ingest(
     from mymem.wiki.types import TagDomain
     from mymem.wiki.tags import domain_from_str, normalize_tags
 
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as prog:
+    with Progress(TextColumn("[cyan]>[/cyan]"), TextColumn("{task.description}"), console=console) as prog:
         task = prog.add_task(f"Ingesting [cyan]{source}[/]…")
         result = _run(ingest_source(
             source,
@@ -140,7 +140,7 @@ def query(
     domain_obj    = domain_from_str(domain) if domain else None
     domain_filter = TagDomain(domain) if domain else None
 
-    with Progress(SpinnerColumn(), TextColumn("Searching wiki…"), console=console) as prog:
+    with Progress(TextColumn("[cyan]>[/cyan]"), TextColumn("Searching wiki…"), console=console) as prog:
         task = prog.add_task("query")
         result = _run(query_wiki(
             question,
@@ -242,7 +242,7 @@ def introspect(
             err.print(f"Invalid date: {date_str!r}. Use YYYY-MM-DD.")
             raise typer.Exit(1)
 
-    with Progress(SpinnerColumn(), TextColumn("Generating summary…"), console=console) as prog:
+    with Progress(TextColumn("[cyan]>[/cyan]"), TextColumn("Generating summary…"), console=console) as prog:
         task = prog.add_task("introspect")
         result = _run(run_introspect(
             wiki_dir=wiki_dir,
@@ -314,6 +314,57 @@ def tags() -> None:
 
 
 # ---------------------------------------------------------------------------
+# mymem eval
+# ---------------------------------------------------------------------------
+
+@app.command()
+def eval(
+    wiki: bool      = typer.Option(True,  "--wiki/--no-wiki",        help="Run wiki quality eval"),
+    chunks: bool    = typer.Option(True,  "--chunks/--no-chunks",    help="Run chunk size ablation"),
+    retrieval: bool = typer.Option(True,  "--retrieval/--no-retrieval", help="Run BM25 retrieval eval"),
+    llm_judge: bool = typer.Option(False, "--llm-judge",             help="Enable RAGAS-lite via cloud model"),
+    cases: str      = typer.Option("tests/eval_cases/retrieval.yaml", "--cases", help="Path to retrieval test cases YAML"),
+) -> None:
+    """Run eval suite: wiki quality, chunk ablation, retrieval, and optional LLM-judge."""
+    import asyncio as _asyncio
+    from mymem.evals.runner import EvalConfig, run_evals
+    from mymem.evals.report import print_report
+
+    settings = _get_settings()
+    settings.ensure_dirs()
+    wiki_dir, _, _, _ = _paths(settings)
+    data_dir = Path("data")
+
+    router = _make_router(settings) if llm_judge else None
+
+    cases_path = Path(cases)
+    if not cases_path.suffix == ".yaml":
+        err.print(f"[red]Error:[/red] --cases must point to a .yaml file, got: {cases_path.name}")
+        raise typer.Exit(1)
+    if cases_path.is_absolute() and not str(cases_path).startswith(str(Path.cwd())):
+        err.print("[red]Error:[/red] --cases path must be within the project directory")
+        raise typer.Exit(1)
+
+    cfg = EvalConfig(
+        wiki_dir=wiki_dir,
+        data_dir=data_dir,
+        cases_path=cases_path,
+        run_chunks=chunks,
+        run_wiki=wiki,
+        run_retrieval=retrieval,
+        run_llm_judge=llm_judge,
+        router=router,
+    )
+
+    with Progress(TextColumn("[cyan]>[/cyan]"), TextColumn("Running evals..."), console=console) as prog:
+        t = prog.add_task("eval")
+        report = _run(run_evals(cfg))
+        prog.update(t, completed=True)
+
+    print_report(report)
+
+
+# ---------------------------------------------------------------------------
 # mymem serve
 # ---------------------------------------------------------------------------
 
@@ -322,6 +373,7 @@ def serve(
     port: int  = typer.Option(7860, "--port", "-p", help="Port to listen on"),
     host: str  = typer.Option("127.0.0.1", "--host", help="Host to bind to"),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Open browser on start"),
+    dev: bool  = typer.Option(False, "--dev", help="Dev mode: skip serving frontend/dist, enable uvicorn reload"),
 ) -> None:
     """Start the web UI."""
     try:
@@ -330,19 +382,27 @@ def serve(
         err.print("uvicorn not installed. Run: pip install uvicorn")
         raise typer.Exit(1)
 
-    url = f"http://{host}:{port}"
-    console.print(f"[bold green]MyMem[/] web UI → [link={url}]{url}[/link]")
-
-    if open_browser:
-        import threading, webbrowser
-        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    if dev:
+        import os
+        os.environ["MYMEM_DEV"] = "1"
+        console.print(
+            "[bold green]MyMem[/] API → [bold]http://{host}:{port}[/bold]  "
+            "[dim](dev mode — open http://localhost:5173 after running npm run dev in frontend/)[/dim]"
+            .format(host=host, port=port)
+        )
+    else:
+        url = f"http://{host}:{port}"
+        console.print(f"[bold green]MyMem[/] web UI → [link={url}]{url}[/link]")
+        if open_browser:
+            import threading, webbrowser
+            threading.Timer(1.2, lambda: webbrowser.open(url)).start()
 
     uvicorn.run(
         "mymem.web.app:app",
         host=host,
         port=port,
-        reload=False,
-        log_level="warning",
+        reload=dev,
+        log_level="info" if dev else "warning",
     )
 
 

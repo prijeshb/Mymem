@@ -2,6 +2,7 @@ import type {
   Page, PagedPages, Stats, GraphData, IngestResult, IntrospectResult,
   CuriosityResult, LintResult, SSEEvent, SourceType, Domain,
   WikiPageData, LogEntry, HeatmapData, DailySummary, ArchivedPage,
+  QuizQuestion, DigestResult,
 } from './types';
 
 // In dev Vite proxies /api/* → :7860; in prod FastAPI serves everything
@@ -125,6 +126,18 @@ export async function fetchLog(limit = 15): Promise<LogEntry[]> {
 export async function fetchHeatmap(): Promise<HeatmapData> {
   const res = await fetch(`${BASE}/api/heatmap`);
   if (!res.ok) throw new Error(`GET /api/heatmap: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchQuestions(n = 5): Promise<QuizQuestion[]> {
+  const res = await fetch(`${BASE}/api/introspect/questions?n=${n}`);
+  if (!res.ok) throw new Error(`GET /api/introspect/questions: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchDigest(period = 7): Promise<DigestResult> {
+  const res = await fetch(`${BASE}/api/introspect/digest?period=${period}`);
+  if (!res.ok) throw new Error(`GET /api/introspect/digest: ${res.status}`);
   return res.json();
 }
 

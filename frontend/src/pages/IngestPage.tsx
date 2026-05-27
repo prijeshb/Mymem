@@ -5,7 +5,7 @@ import type { IngestResult, SourceType } from '../lib/types';
 import { ALL_DOMAINS, SOURCE_TYPES } from '../lib/types';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Button, Card, Input, Tabs, TextArea } from '@heroui/react';
-import { LoadingSpinner } from '../components/LoadingSpinner';
+import { ClaudeLoader } from '../components/ClaudeLoader';
 
 type Tab = 'url' | 'file' | 'text';
 
@@ -163,6 +163,18 @@ function ResultCard({ result }: { result: IngestResult }) {
       </div>
     );
   }
+  if (result.rag_only) {
+    return (
+      <div role="alert" className="p-4 rounded-lg border border-sky-700 bg-sky-950 text-sky-200 text-sm space-y-1">
+        <div className="font-semibold mb-2">✓ Indexed for search</div>
+        <div className="text-sky-300 text-xs">
+          This PDF was embedded into the vector store — no wiki pages were written.
+          It will appear in search results when queries match its content.
+        </div>
+        <div className="mt-2">Chunks indexed: <strong>{result.rag_chunks}</strong></div>
+      </div>
+    );
+  }
   return (
     <div role="alert" className="p-4 rounded-lg border border-green-700 bg-green-950 text-green-200 text-sm space-y-1">
       <div className="font-semibold mb-2">✓ Ingest complete</div>
@@ -297,7 +309,7 @@ export function IngestPage() {
                   </p>
                 </div>
                 {loading
-                  ? <LoadingSpinner className="py-3" />
+                  ? <ClaudeLoader className="py-3" />
                   : <Button type="submit" variant="primary" fullWidth>Ingest Source</Button>}
               </form>
             </Tabs.Panel>
@@ -342,7 +354,7 @@ export function IngestPage() {
                   )}
                 </div>
                 {loading
-                  ? <LoadingSpinner className="py-3" />
+                  ? <ClaudeLoader className="py-3" />
                   : <Button type="submit" variant="primary" fullWidth isDisabled={!file}>Upload & Ingest</Button>}
               </form>
             </Tabs.Panel>
@@ -389,7 +401,7 @@ export function IngestPage() {
                   </p>
                 </div>
                 {loading
-                  ? <LoadingSpinner className="py-3" />
+                  ? <ClaudeLoader className="py-3" />
                   : <Button type="submit" variant="primary" fullWidth isDisabled={!text.trim()}>Ingest Text</Button>}
               </form>
             </Tabs.Panel>
