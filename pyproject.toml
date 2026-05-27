@@ -27,7 +27,7 @@ dependencies = [
     # Ingestion
     "httpx>=0.28.0",           # URL fetching (fallback)
     "trafilatura>=2.0.0",      # primary article/URL extraction
-    "pypdf==6.9.2",            # PDF text extraction
+    "pypdf>=6.12.2",           # PDF text extraction (6.9.2 had 5 memory-exhaustion CVEs)
     "beautifulsoup4==4.14.3",  # HTML → text fallback
 
     # RAG chunking
@@ -41,7 +41,7 @@ dependencies = [
     # Web UI
     "markdown==3.6",
     "fastapi==0.134.0",
-    "python-multipart==0.0.9",
+    "python-multipart>=0.0.29",  # 0.0.9 had 4 DoS CVEs
     "uvicorn==0.41.0",
     "jinja2==3.1.6",
 ]

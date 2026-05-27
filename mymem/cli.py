@@ -16,7 +16,7 @@ import typer
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import Progress, TextColumn
 from rich.table import Table
 
 app     = typer.Typer(name="mymem", help="Personal LLM-powered knowledge base.", add_completion=False)
@@ -84,7 +84,7 @@ def ingest(
     from mymem.wiki.types import TagDomain
     from mymem.wiki.tags import domain_from_str, normalize_tags
 
-    with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as prog:
+    with Progress(TextColumn("[cyan]>[/cyan]"), TextColumn("{task.description}"), console=console) as prog:
         task = prog.add_task(f"Ingesting [cyan]{source}[/]…")
         result = _run(ingest_source(
             source,
@@ -140,7 +140,7 @@ def query(
     domain_obj    = domain_from_str(domain) if domain else None
     domain_filter = TagDomain(domain) if domain else None
 
-    with Progress(SpinnerColumn(), TextColumn("Searching wiki…"), console=console) as prog:
+    with Progress(TextColumn("[cyan]>[/cyan]"), TextColumn("Searching wiki…"), console=console) as prog:
         task = prog.add_task("query")
         result = _run(query_wiki(
             question,
@@ -242,7 +242,7 @@ def introspect(
             err.print(f"Invalid date: {date_str!r}. Use YYYY-MM-DD.")
             raise typer.Exit(1)
 
-    with Progress(SpinnerColumn(), TextColumn("Generating summary…"), console=console) as prog:
+    with Progress(TextColumn("[cyan]>[/cyan]"), TextColumn("Generating summary…"), console=console) as prog:
         task = prog.add_task("introspect")
         result = _run(run_introspect(
             wiki_dir=wiki_dir,
@@ -337,10 +337,18 @@ def eval(
 
     router = _make_router(settings) if llm_judge else None
 
+    cases_path = Path(cases)
+    if not cases_path.suffix == ".yaml":
+        err.print(f"[red]Error:[/red] --cases must point to a .yaml file, got: {cases_path.name}")
+        raise typer.Exit(1)
+    if cases_path.is_absolute() and not str(cases_path).startswith(str(Path.cwd())):
+        err.print("[red]Error:[/red] --cases path must be within the project directory")
+        raise typer.Exit(1)
+
     cfg = EvalConfig(
         wiki_dir=wiki_dir,
         data_dir=data_dir,
-        cases_path=Path(cases),
+        cases_path=cases_path,
         run_chunks=chunks,
         run_wiki=wiki,
         run_retrieval=retrieval,
@@ -348,7 +356,7 @@ def eval(
         router=router,
     )
 
-    with Progress(SpinnerColumn(), TextColumn("Running evals…"), console=console) as prog:
+    with Progress(TextColumn("[cyan]>[/cyan]"), TextColumn("Running evals..."), console=console) as prog:
         t = prog.add_task("eval")
         report = _run(run_evals(cfg))
         prog.update(t, completed=True)

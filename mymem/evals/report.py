@@ -102,7 +102,7 @@ def print_report(report: EvalReport) -> None:
     # --- Retrieval ---
     if report.retrieval:
         r = report.retrieval
-        t = Table(title=f"Retrieval Eval (BM25 @ k={r.k})", box=box.SIMPLE_HEAVY)
+        t = Table(title=f"Retrieval Eval (BM25 @ k={r.k}, {r.mode})", box=box.SIMPLE_HEAVY)
         t.add_column("Metric", style="dim")
         t.add_column("Value", justify="right")
         t.add_column("Status", justify="center")

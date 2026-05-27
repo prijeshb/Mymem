@@ -15,7 +15,7 @@
     "marked": "12.0.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "react-router-dom": "6.26.2"
+    "react-router-dom": "^6.30.3"
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.15",
@@ -26,6 +26,6 @@
     "@vitejs/plugin-react": "4.3.3",
     "tailwindcss": "^4.2.2",
     "typescript": "5.5.4",
-    "vite": "5.4.10"
+    "vite": "^5.4.21"
   }
 }

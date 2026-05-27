@@ -24,6 +24,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from mymem.observability.logger import get_logger
 from mymem.pipeline.ingest import ingest_source
 from mymem.pipeline.introspect import introspect, top_interests, generate_questions, generate_digest
 from mymem.pipeline.lint import format_lint_report, lint_wiki
@@ -33,6 +34,7 @@ from mymem.wiki.page import list_pages
 from mymem.wiki.types import TagDomain
 
 router = APIRouter()
+log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +159,8 @@ async def api_query(req: QueryRequest, request: Request) -> StreamingResponse:
             yield f"data: {done}\n\n"
 
         except Exception as exc:
-            err = json.dumps({"type": "error", "message": str(exc)})
+            log.exception("query stream failed", error=str(exc))
+            err = json.dumps({"type": "error", "message": "Query failed. Please try again."})
             yield f"data: {err}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -317,7 +320,8 @@ async def api_ingest(req: IngestRequest, request: Request) -> JSONResponse:
             "chunk_count":   result.chunk_count,
         })
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        log.exception("ingest failed", source=req.source, error=str(exc))
+        raise HTTPException(status_code=500, detail="Ingest failed. Check server logs for details.")
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +435,8 @@ async def api_ingest_text(req: IngestTextRequest, request: Request) -> JSONRespo
             db_path=request.app.state.db_path,
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        log.exception("upload ingest failed", error=str(exc))
+        raise HTTPException(status_code=500, detail="Upload processing failed. Check server logs for details.")
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 

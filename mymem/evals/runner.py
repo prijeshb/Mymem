@@ -17,7 +17,7 @@ from mymem.evals import retrieval as ret_mod
 from mymem.evals.chunking import ChunkingReport
 from mymem.evals.confidence import score_confidence
 from mymem.evals.ingest_quality import WikiQualityReport
-from mymem.evals.retrieval import RetrievalReport, load_cases
+from mymem.evals.retrieval import RetrievalReport, generate_self_supervised_cases, load_cases
 from mymem.evals.store import save_run
 from mymem.observability.logger import get_logger
 from mymem.wiki.page import list_pages
@@ -106,8 +106,8 @@ async def run_evals(cfg: EvalConfig) -> EvalReport:
                 "confidence_states": states,
             })
         except Exception as exc:
-            log.warning("wiki quality eval failed", error=str(exc))
-            report.skipped.append(f"wiki_quality: {exc}")
+            log.warning("wiki quality eval failed", error=str(exc), exc_info=True)
+            report.skipped.append("wiki_quality: eval failed (check logs)")
 
     # --- Chunking ablation ---
     if cfg.run_chunks:
@@ -132,28 +132,39 @@ async def run_evals(cfg: EvalConfig) -> EvalReport:
                 "recommended_max_tokens": cr.recommended_max_tokens,
             })
         except Exception as exc:
-            log.warning("chunking eval failed", error=str(exc))
-            report.skipped.append(f"chunking: {exc}")
+            log.warning("chunking eval failed", error=str(exc), exc_info=True)
+            report.skipped.append("chunking: eval failed (check logs)")
 
     # --- Retrieval ---
     if cfg.run_retrieval:
         log.info("Running retrieval eval")
         try:
-            cases = load_cases(cfg.cases_path)
-            if not cases:
-                report.skipped.append("retrieval: no test cases in retrieval.yaml")
+            yaml_cases = load_cases(cfg.cases_path)
+            if yaml_cases:
+                cases = yaml_cases
+                mode = "yaml"
+                log.info("Using pinned YAML cases", count=len(cases))
             else:
-                ret = ret_mod.run_bm25_eval(cases, cfg.wiki_dir)
+                pages = list_pages(cfg.wiki_dir)
+                cases = generate_self_supervised_cases(pages, n=20)
+                mode = "self-supervised"
+                log.info("Using self-supervised cases", count=len(cases))
+
+            if not cases:
+                report.skipped.append("retrieval: no wiki pages available for self-supervised eval")
+            else:
+                ret = ret_mod.run_bm25_eval(cases, cfg.wiki_dir, mode=mode)
                 report.retrieval = ret
                 save_run(evals_db, "retrieval", {
                     "precision_at_k": ret.precision_at_k,
                     "mrr": ret.mrr,
                     "udcg": ret.udcg,
                     "grade": ret.grade,
+                    "mode": mode,
                 })
         except Exception as exc:
-            log.warning("retrieval eval failed", error=str(exc))
-            report.skipped.append(f"retrieval: {exc}")
+            log.warning("retrieval eval failed", error=str(exc), exc_info=True)
+            report.skipped.append("retrieval: eval failed (check logs)")
 
     # --- LLM judge (RAGAS-lite) ---
     if cfg.run_llm_judge:
