@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -390,3 +391,206 @@ def _build_recommendations(
     # Cap at 5 recommendations, prioritise most stale
     recs.sort(key=lambda r: r.last_seen or date.min)
     return recs[:5]
+
+
+# ---------------------------------------------------------------------------
+# Question generator
+# ---------------------------------------------------------------------------
+
+@dataclass
+class QuizQuestion:
+    question:   str
+    page_title: str
+    hint:       str
+    difficulty: str = "medium"  # "easy" | "medium" | "hard"
+
+
+_QUESTIONS_SYSTEM = """\
+You are a knowledge retention coach. Given wiki page excerpts, generate one
+test question per page that requires genuine understanding, not just recall.
+
+Output ONLY valid JSON (no markdown fences), an array:
+[
+  {
+    "question":   "...",
+    "page_title": "exact page title as given",
+    "hint":       "one sentence hint without giving away the answer",
+    "difficulty": "easy|medium|hard"
+  }
+]
+
+Vary difficulty across pages. Make questions specific and thought-provoking.
+"""
+
+
+def _extract_json(text: str) -> str:
+    """Strip markdown code fences, return raw JSON string."""
+    text = text.strip()
+    text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+    text = re.sub(r"\n?```\s*$", "", text)
+    return text.strip()
+
+
+async def generate_questions(
+    wiki_dir: Path,
+    router: ModelRouter,
+    n_pages: int = 5,
+) -> list[QuizQuestion]:
+    """Pick the N most recently updated pages and generate one quiz question per page."""
+    pages = sorted(list_pages(wiki_dir), key=lambda p: p.updated, reverse=True)[:n_pages]
+    if not pages:
+        return []
+
+    excerpts = "\n\n".join(
+        f"PAGE TITLE: {p.title}\nEXCERPT: {p.body[:600].strip()}"
+        for p in pages
+    )
+
+    raw = await router.call(excerpts, task="introspect", system=_QUESTIONS_SYSTEM)
+    try:
+        data = json.loads(_extract_json(raw))
+        return [
+            QuizQuestion(
+                question=item.get("question", ""),
+                page_title=item.get("page_title", ""),
+                hint=item.get("hint", ""),
+                difficulty=item.get("difficulty", "medium"),
+            )
+            for item in data
+            if item.get("question")
+        ]
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Weekly / period digest
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DigestTheme:
+    theme:   str
+    pages:   list[str]
+    insight: str
+
+
+@dataclass
+class DigestResult:
+    period_days:          int
+    date_range:           str
+    themes:               list[DigestTheme]
+    emerging_connections: list[str]
+    knowledge_gaps:       list[str]
+    serendipity:          str
+    open_question:        str
+    pages_active:         int
+    queries_made:         int
+
+
+_DIGEST_SYSTEM = """\
+You are a learning analyst. Analyze the user's knowledge activity and return ONLY valid JSON (no markdown).
+
+Return exactly this structure:
+{
+  "themes": [
+    {"theme": "short name", "pages": ["Page A", "Page B"], "insight": "one sentence insight"}
+  ],
+  "emerging_connections": ["cross-domain connection 1", "connection 2"],
+  "knowledge_gaps": ["gap description 1", "gap description 2"],
+  "serendipity": "one surprising or unexpected connection from the period",
+  "open_question": "one deep question worth pondering based on the period"
+}
+
+themes: 3-5 main topics with key insight each.
+emerging_connections: 2-3 bridges between different domains/topics.
+knowledge_gaps: 2-3 areas with high curiosity but thin wiki coverage.
+serendipity: something genuinely surprising or non-obvious.
+open_question: a thought-provoking question, not a simple factual one.
+"""
+
+
+async def generate_digest(
+    wiki_dir:     Path,
+    log_path:     Path,
+    curiosity_db: Path,
+    router:       ModelRouter,
+    period_days:  int = 7,
+) -> DigestResult:
+    """Generate a rich multi-dimensional digest of the last N days of activity."""
+    today  = date.today()
+    since  = today - timedelta(days=period_days)
+    date_range = f"{since.isoformat()} → {today.isoformat()}"
+
+    wiki_log  = WikiLog(log_path)
+    all_entries = wiki_log.load()
+    period_entries = [e for e in all_entries if e.timestamp.date() >= since]
+
+    # Collect active page titles and query count
+    active_titles: list[str] = []
+    queries_made = 0
+    for e in period_entries:
+        active_titles.extend(e.affected_pages)
+        if e.operation.value == "query":
+            queries_made += 1
+    active_titles = list(dict.fromkeys(active_titles))
+
+    interests = top_interests(curiosity_db, limit=15)
+
+    # Build context for the LLM
+    interest_str = ", ".join(
+        f"{i['domain']}/{i['tag']} ({i['weight']:.1f})" for i in interests[:10]
+    )
+    pages_context = ", ".join(active_titles[:40]) or "none"
+
+    # Fetch short excerpts for active pages
+    all_pages = {p.title: p for p in list_pages(wiki_dir)}
+    excerpts = []
+    for title in active_titles[:10]:
+        page = all_pages.get(title)
+        if page:
+            excerpts.append(f"- {title} ({page.domain.value}): {page.body[:200].strip()}")
+
+    prompt = (
+        f"Period: {date_range} ({period_days} days)\n"
+        f"Active pages ({len(active_titles)} total): {pages_context}\n"
+        f"Top interests: {interest_str}\n"
+        f"Queries made: {queries_made}\n\n"
+        + ("Page excerpts:\n" + "\n".join(excerpts) if excerpts else "")
+    )
+
+    raw = await router.call(prompt, task="introspect", system=_DIGEST_SYSTEM)
+
+    try:
+        data = json.loads(_extract_json(raw))
+        themes = [
+            DigestTheme(
+                theme=t.get("theme", ""),
+                pages=t.get("pages", []),
+                insight=t.get("insight", ""),
+            )
+            for t in data.get("themes", [])
+            if t.get("theme")
+        ]
+        return DigestResult(
+            period_days=period_days,
+            date_range=date_range,
+            themes=themes,
+            emerging_connections=data.get("emerging_connections", []),
+            knowledge_gaps=data.get("knowledge_gaps", []),
+            serendipity=data.get("serendipity", ""),
+            open_question=data.get("open_question", ""),
+            pages_active=len(active_titles),
+            queries_made=queries_made,
+        )
+    except (json.JSONDecodeError, TypeError):
+        return DigestResult(
+            period_days=period_days,
+            date_range=date_range,
+            themes=[],
+            emerging_connections=[],
+            knowledge_gaps=[],
+            serendipity="Could not parse digest — try regenerating.",
+            open_question="",
+            pages_active=len(active_titles),
+            queries_made=queries_made,
+        )

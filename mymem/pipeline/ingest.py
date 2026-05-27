@@ -25,7 +25,7 @@ from mymem.observability.logger import get_logger, set_run_id
 from mymem.pipeline.router import ModelRouter
 from mymem.pipeline.splitter import ChunkSplitter, merge_prompt, merge_system_prompt
 
-splitter = ChunkSplitter(max_tokens=6000)
+splitter = ChunkSplitter(max_tokens=1024)
 from mymem.security.sanitize import sanitize_for_prompt
 from mymem.security.scanner import has_high_severity_secret
 from mymem.wiki.index import IndexManager
@@ -622,10 +622,12 @@ async def ingest_source(
         chunks=chunk_count, cost=f"${router.session_cost:.4f}",
     )
 
-    # Record quality analytics for YouTube ingests
-    if db_path and (source_type == "youtube" or _is_youtube_url(source)):
-        _record_youtube_analytics(
+    # Record quality analytics for all ingests
+    if db_path:
+        _record_ingest_analytics(
             db_path=db_path,
+            source_type=source_type,
+            source=source,
             source_text=source_text,
             all_ideas=all_ideas,
             result=result,
@@ -706,15 +708,18 @@ async def _rag_index_text(source_name: str, text: str, *, db_path: Path | None) 
         log.warning("RAG text indexing raised unexpectedly — continuing", source=source_name, error=str(exc))
 
 
-def _record_youtube_analytics(
+def _record_ingest_analytics(
     *,
     db_path: Path,
+    source_type: str,
+    source: str,
     source_text: str,
     all_ideas: list[dict[str, object]],
     result: "IngestResult",
     wiki_dir: Path,
 ) -> None:
-    """Measure quality of generated pages and persist analytics record."""
+    """Measure quality of generated pages and persist analytics record for all source types."""
+    from mymem.evals.metrics import duplicate_rate
     from mymem.observability.ingest_analytics import record_ingest
 
     all_touched = result.pages_written + result.pages_updated
@@ -732,16 +737,24 @@ def _record_youtube_analytics(
     avg_chars = sum(page_chars) / len(page_chars) if page_chars else 0.0
     avg_links = sum(page_wikilinks) / len(page_wikilinks) if page_wikilinks else 0.0
 
+    # Measure duplicate ideas across chunks
+    idea_summaries = [str(idea.get("summary", "")) for idea in all_ideas if idea.get("summary")]
+    dup_rate = duplicate_rate(idea_summaries) if len(idea_summaries) >= 2 else 0.0
+
+    is_youtube = source_type == "youtube" or _is_youtube_url(source)
+
     record_ingest(
         db_path,
-        source_type="youtube",
-        metadata_enriched="[YouTube Video — ID:" in source_text,
+        source_type=source_type,
+        metadata_enriched=is_youtube and "[YouTube Video — ID:" in source_text,
         source_chars=len(source_text),
         concepts_extracted=len(all_ideas),
         pages_written=len(result.pages_written),
         pages_updated=len(result.pages_updated),
         avg_page_chars=avg_chars,
         avg_wikilinks=avg_links,
+        chunk_count=result.chunk_count,
+        idea_duplicate_rate=round(dup_rate, 3),
     )
 
 

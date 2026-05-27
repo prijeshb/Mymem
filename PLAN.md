@@ -446,8 +446,9 @@ frontend/
       Navbar.tsx               ✓ nav links + ThemeToggle
       ThemeToggle.tsx          ✓ dark/light mode (localStorage)
       DomainBadge.tsx          ✓
-      CitationChip.tsx         ✓
-      LoadingSpinner.tsx       ✓
+      CitationChip.tsx         ✓ inline citation display
+      ClaudeLoader.tsx         ✓ three-dot bouncing loader with cycling witty words
+      LoadingSpinner.tsx       ✓ custom CSS ring spinner with witty cycling words
       ErrorBanner.tsx          ✓
     lib/
       api.ts                   ✓ typed wrappers for all /api/* endpoints + SSE streamQuery
@@ -458,13 +459,201 @@ FastAPI serves frontend/dist/ automatically (app.py detects it).
 Jinja2 templates remain as fallback if dist/ is deleted.
 
 REMAINING → delete mymem/web/templates/ + routes/pages.py (do after confirming SPA is stable)
-
-### Phase 8 (Future): Ontology Graph
-
-Not in current build. See bottom of this file.
 ```
 
-### Phase 9: Tests
+---
+
+## Phase 7b (V1-0001): RAG Infrastructure — DONE
+
+PDF ingestion and hybrid search added as a parallel track alongside the React frontend.
+
+### RAG System (`mymem/rag/`)
+
+| File | Purpose |
+|------|---------|
+| `mymem/rag/store.py` | sqlite-vec chunk store, vector similarity search, `delete_source()` |
+| `mymem/rag/pdf_parser.py` | pypdf extraction + paragraph-aware sliding-window chunking (800 chars, 80 overlap) |
+| `mymem/rag/embedder.py` | Ollama `nomic-embed-text` 768-dim embeddings |
+| `mymem/rag/ingest.py` | Orchestrate parse → embed → store |
+
+### Router Refactor
+
+Monolithic `mymem/pipeline/router.py` split into a package:
+`router/__init__.py`, `_router.py`, `_chain.py`, `_cost.py`, `_registry.py`, `_types.py`, `_utils.py`
+
+### Other V1-0001 Additions
+
+- `mymem/observability/ingest_analytics.py` — quality tracking for YouTube ingests
+- `mymem/web/routes/logs.py` — dedicated module for `GET /api/log` + `GET /api/heatmap` (extracted from `api.py`)
+- `mymem/pipeline/query.py` — hybrid retrieval: wiki keyword + RAG vector combined
+- `mymem/pipeline/search.py` — DDG + Wikipedia fallback + TF-IDF Phase 2
+- `mymem/pipeline/ingest.py` — uploaded files persist to `raw/<subdir>/`; PDFs short-circuit to RAG-only
+- `mymem serve --dev` flag — skips static serving, adds CORS for Vite dev server (`:5174`), enables reload
+- Frontend: `ClaudeLoader`, `CitationChip`, per-port Vite config, SSE proxy fix
+
+---
+
+## Phase 7c (V1-0002): Wiki RAG Chunking + Dashboard Refactor — DONE
+
+### Wiki RAG Chunking (`mymem/rag/wiki_chunker.py`)
+
+Markdown/header + parent-child chunking strategy for wiki pages:
+- Strip YAML frontmatter → extract `title`, `domain`, `tags`
+- `MarkdownHeaderTextSplitter` on `#` / `##` / `###` → parent sections (≤ 4096 chars)
+- `RecursiveCharacterTextSplitter` splits each section into ~300-token child chunks (30-token overlap)
+- Embed text prefixed as `"{page_title} > {heading_path}: {child_text}"` for retrieval precision
+- Each chunk stores: `source_path`, `source_slug`, `heading_path`, `parent_text`, `chunk_type`, `page_title`, `domain`, `tags`
+- `rag/ingest.py` gets `ingest_wiki_page(force=True)` — clears + re-inserts on every wiki page write
+- `pipeline/ingest.py` calls `_rag_index_wiki()` fire-and-forget after every wiki write
+
+### Dashboard Layout Refactor (`DashboardPage.tsx`)
+
+3-zone full-height layout: `left (240px) | center (flex-1) | right slide-in (420px)`
+- Right panel: `w-0 → w-[420px]` via `transition-all duration-300` (Claude Code panel pattern)
+- Answer output: `max-h-[55vh] overflow-y-auto` — scrollable, never pushes page
+- `max-w-screen-2xl` on `<main>`; `h-[calc(100vh-56px-2rem)]` on root
+
+---
+
+## Phase 7d (V1-0003 — current): PDF Chunking Upgrade — IN PROGRESS
+
+Upgrade `mymem/rag/pdf_parser.py` from paragraph-aware sliding-window to document-layout + metadata-aware strategy:
+- Split on actual PDF headings/sections instead of arbitrary token counts
+- Store per-chunk metadata: `heading_path`, `page_title`, `source_tags`, `modified_date`
+- Target: 300–800 tokens per chunk, 50–150 token overlap
+- Retrieve small chunks → return parent section when answering
+
+---
+
+## Phase 7d-UX (V1-0003): Frontend UX Overhaul — DONE
+
+### Dashboard Chat Layout (`DashboardPage.tsx`)
+
+Full 3-column chat layout — Perplexity/Notion AI style:
+- **Left sidebar** (`w-52`): domain filter dots with counts, heatmap tiles per domain, stats footer
+- **Center**: domain chip row + scrollable chat thread (`Message[]` array) + bottom input bar
+- **Right panel** (`w-72`): Wiki Pages / Memory tabs with search + page list
+- `Message` type: `{id, role, text, citations, phase, timestamp, error?}`
+- `ThinkingLoader`: 3 bouncing dots with staggered delay, cycling status strings (`setInterval 1800ms`), shimmer skeleton lines
+- `MessageBubble`: shows loader when `phase === 'streaming' && text === ''`, blinking cursor while streaming, prose + source cards + wiki cards when done
+- Full-height layout via `-mx-4 -my-4 h-[calc(100vh-3.5rem)]` to break out of App padding
+
+### Navbar Redesign (`Navbar.tsx`)
+
+- Logo mark: `w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600` with glow blur layer + sparkles SVG
+- Brand text: `My` (gray) + `Mem` (gradient `from-indigo-600 to-violet-600 bg-clip-text text-transparent`)
+- Nav links right: Graph | Introspect | Search (hidden, `className="hidden"`) | divider | +Ingest | ThemeToggle
+
+### Introspect Diversification (`IntrospectPage.tsx` + backend)
+
+Three new interactive sections added to the Introspect page:
+
+**Research Topic**
+- Text input + Suggest button (Enter key supported)
+- Calls `GET /api/introspect?topic=<query>` → renders LLM summary + swipeable recommended pages
+
+**Test Yourself (Quiz Generator)**
+- Generate 5 questions from recent wiki pages
+- Per-card: question text + difficulty badge (easy/medium/hard), click-to-reveal hint + wiki page link
+- Reveal all / Hide all controls; "New set" button to regenerate
+
+**Knowledge Digest**
+- 7-day / 30-day period toggle (clears digest on switch)
+- Calls `GET /api/introspect/digest?period=N`
+- Displays: stats bar (pages active, queries made, date range), themes grid with page links, emerging connections (emerald), knowledge gaps (amber), serendipity callout, italic open question
+
+**Backend additions** (`mymem/pipeline/introspect.py`):
+- `QuizQuestion`, `DigestTheme`, `DigestResult` dataclasses
+- `generate_questions(wiki_dir, router, n_pages=5)` — picks N most-recent pages, JSON-only LLM prompt
+- `generate_digest(wiki_dir, log_path, curiosity_db, router, period_days=7)` — reads log window, counts activity, JSON-only LLM prompt
+- `_extract_json()` helper to strip markdown code fences before `json.loads`
+- `GET /api/introspect/questions` and `GET /api/introspect/digest` endpoints
+
+**Frontend additions**:
+- `types.ts`: `QuizQuestion`, `DigestTheme`, `DigestResult`
+- `api.ts`: `fetchQuestions(n)`, `fetchDigest(period)`
+- `index.css`: `@keyframes fadeIn` for ThinkingLoader status text
+
+---
+
+## Phase 7e (Research): Markdown, HTML, and Generated Pages
+
+Research whether MyMem should keep wiki pages as markdown only, move selected pages to HTML, or support a hybrid markdown + HTML page model. This must account for pages generated on the fly during ingest, query save, introspection, eval reporting, and future agent workflows.
+
+### Questions to Answer
+
+| Question | Why it matters |
+|----------|----------------|
+| Should markdown remain the canonical storage format? | Keeps Obsidian/editability/simple git diffs, but limits rich layouts and interactive blocks |
+| Should HTML be stored, rendered, or generated on demand? | Determines whether HTML becomes source of truth, cache artifact, or frontend output |
+| Which page types need HTML? | Dashboards, timelines, source reports, eval reports, graph views, and generated research briefs may need richer structure than markdown |
+| Can a mixed model preserve wikilinks, backlinks, tags, domains, and RAG indexing? | Existing wiki machinery depends on markdown metadata and link extraction |
+| How should generated-on-the-go content be cached and invalidated? | Query answers, introspect summaries, and ingest reports may be expensive to regenerate |
+
+### Options to Evaluate
+
+1. **Markdown canonical, HTML rendered at view time**
+   - Keep `wiki/*.md` as source of truth.
+   - Frontend/API converts markdown to HTML or React components when viewed.
+   - Best for compatibility with current pipeline, Obsidian, git, and RAG indexing.
+
+2. **Markdown canonical, optional generated HTML cache**
+   - Store markdown pages normally.
+   - Add `data/render_cache.db` or `wiki/.rendered/<slug>.html` for expensive rendered views.
+   - Invalidate cache when page `updated` changes, renderer version changes, or linked dependencies change.
+
+3. **Hybrid page types**
+   - Add a `content_type` frontmatter field: `markdown`, `html`, `generated`, or `report`.
+   - Markdown remains default; HTML/report pages opt into richer rendering.
+   - Requires API and frontend support for safe rendering, sanitization, search, and backlinks.
+
+4. **HTML canonical for selected generated artifacts**
+   - Use HTML as durable output for reports that are layout-heavy or interactive.
+   - Requires strong sanitization, metadata sidecars, and a way to extract text/links for index + RAG.
+   - Highest risk; only pursue if markdown/rendered-cache cannot support the use cases.
+
+### Generated-On-The-Go Requirements
+
+- Generated pages must have stable slugs, provenance, source inputs, and renderer/model version metadata.
+- Every generated artifact should declare whether it is `ephemeral`, `cached`, or `committed`.
+- Ephemeral content can stream directly to the UI and disappear after the session.
+- Cached content can be reused but regenerated when dependencies change.
+- Committed content becomes a real wiki page and must update `index.md`, `log.md`, backlinks, curiosity events, and RAG chunks.
+- Generated HTML must be sanitized before display and should never bypass the existing security layer.
+
+### Research Tasks
+
+1. Audit current markdown assumptions in `mymem/wiki/`, `mymem/pipeline/`, `mymem/rag/wiki_chunker.py`, and `frontend/src/pages/WikiPage.tsx`.
+2. Prototype a `PageArtifact`/`RenderedPage` API shape for `/api/page/:slug` with `body`, `content_type`, `rendered_html`, `metadata`, and `cache_status`.
+3. Test whether `marked.js` plus custom React block components is enough for rich generated pages before storing raw HTML.
+4. Design cache invalidation rules using page `updated`, dependency slugs, renderer version, and prompt/model version.
+5. Define sanitization rules for stored or generated HTML, including allowed tags, allowed attributes, link rewriting, and script removal.
+6. Verify indexing behavior: wikilink extraction, backlinks, full-text search, RAG chunking, citations, and graph edges must work across markdown and HTML/generated pages.
+7. Decide the V1 path, likely markdown canonical + optional render cache unless a specific page type proves it needs HTML canonical storage.
+
+### Proposed Decision Gate
+
+Before implementation, produce `docs/html_pages_research.md` with:
+- Recommended storage model
+- API response contract
+- Frontend rendering approach
+- Security/sanitization plan
+- Cache invalidation plan
+- Migration impact on existing `wiki/*.md`
+
+---
+
+## Phase 8 (Future): Query Improvements
+
+V1-0004: Hybrid retrieval re-ranking, better citations, heading-path context in answers.
+
+### Phase 9 (Future): Ontology Graph
+
+Not in current build. See bottom of this file.
+
+---
+
+### Phase 9/10: Tests
 
 Coverage target: ≥ 80% overall; 100% for `lint.py`, `types.py`, `tags.py`.
 `test_web.py` tests `/api/*` routes with `TestClient` — unaffected by Phase 7.

@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from mymem.pipeline.ingest import ingest_source
-from mymem.pipeline.introspect import introspect, top_interests
+from mymem.pipeline.introspect import introspect, top_interests, generate_questions, generate_digest
 from mymem.pipeline.lint import format_lint_report, lint_wiki
 from mymem.pipeline.query import query_wiki
 from mymem.wiki.index import IndexManager
@@ -787,6 +787,64 @@ async def api_introspect(
 
 
 # ---------------------------------------------------------------------------
+# GET /api/introspect/questions
+# ---------------------------------------------------------------------------
+
+@router.get("/introspect/questions")
+async def api_introspect_questions(
+    request: Request,
+    n: int = 5,
+) -> JSONResponse:
+    wiki_dir   = request.app.state.wiki_dir
+    llm_router = request.app.state.router
+
+    questions = await generate_questions(wiki_dir=wiki_dir, router=llm_router, n_pages=n)
+    return JSONResponse([
+        {
+            "question":   q.question,
+            "page_title": q.page_title,
+            "hint":       q.hint,
+            "difficulty": q.difficulty,
+        }
+        for q in questions
+    ])
+
+
+# ---------------------------------------------------------------------------
+# GET /api/introspect/digest
+# ---------------------------------------------------------------------------
+
+@router.get("/introspect/digest")
+async def api_introspect_digest(
+    request:    Request,
+    period:     int = 7,
+) -> JSONResponse:
+    wiki_dir     = request.app.state.wiki_dir
+    log_path     = request.app.state.log_path
+    curiosity_db = request.app.state.curiosity_db
+    llm_router   = request.app.state.router
+
+    result = await generate_digest(
+        wiki_dir=wiki_dir,
+        log_path=log_path,
+        curiosity_db=curiosity_db,
+        router=llm_router,
+        period_days=period,
+    )
+    return JSONResponse({
+        "period_days":          result.period_days,
+        "date_range":           result.date_range,
+        "pages_active":         result.pages_active,
+        "queries_made":         result.queries_made,
+        "themes":               [{"theme": t.theme, "pages": t.pages, "insight": t.insight} for t in result.themes],
+        "emerging_connections": result.emerging_connections,
+        "knowledge_gaps":       result.knowledge_gaps,
+        "serendipity":          result.serendipity,
+        "open_question":        result.open_question,
+    })
+
+
+# ---------------------------------------------------------------------------
 # GET /api/curiosity
 # ---------------------------------------------------------------------------
 
@@ -838,6 +896,20 @@ async def api_analytics_youtube(request: Request) -> JSONResponse:
         },
         "recent": recent,
     })
+
+
+# ---------------------------------------------------------------------------
+# GET /api/evals/summary
+# ---------------------------------------------------------------------------
+
+@router.get("/evals/summary")
+async def api_evals_summary(request: Request) -> JSONResponse:
+    """Latest eval run summary for each eval type, read from data/evals.db."""
+    from mymem.evals.store import latest_summary
+
+    db_path = request.app.state.db_path
+    evals_db = db_path.parent / "evals.db"
+    return JSONResponse(latest_summary(evals_db))
 
 
 @router.get("/curiosity")

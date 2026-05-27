@@ -314,6 +314,49 @@ def tags() -> None:
 
 
 # ---------------------------------------------------------------------------
+# mymem eval
+# ---------------------------------------------------------------------------
+
+@app.command()
+def eval(
+    wiki: bool      = typer.Option(True,  "--wiki/--no-wiki",        help="Run wiki quality eval"),
+    chunks: bool    = typer.Option(True,  "--chunks/--no-chunks",    help="Run chunk size ablation"),
+    retrieval: bool = typer.Option(True,  "--retrieval/--no-retrieval", help="Run BM25 retrieval eval"),
+    llm_judge: bool = typer.Option(False, "--llm-judge",             help="Enable RAGAS-lite via cloud model"),
+    cases: str      = typer.Option("tests/eval_cases/retrieval.yaml", "--cases", help="Path to retrieval test cases YAML"),
+) -> None:
+    """Run eval suite: wiki quality, chunk ablation, retrieval, and optional LLM-judge."""
+    import asyncio as _asyncio
+    from mymem.evals.runner import EvalConfig, run_evals
+    from mymem.evals.report import print_report
+
+    settings = _get_settings()
+    settings.ensure_dirs()
+    wiki_dir, _, _, _ = _paths(settings)
+    data_dir = Path("data")
+
+    router = _make_router(settings) if llm_judge else None
+
+    cfg = EvalConfig(
+        wiki_dir=wiki_dir,
+        data_dir=data_dir,
+        cases_path=Path(cases),
+        run_chunks=chunks,
+        run_wiki=wiki,
+        run_retrieval=retrieval,
+        run_llm_judge=llm_judge,
+        router=router,
+    )
+
+    with Progress(SpinnerColumn(), TextColumn("Running evals…"), console=console) as prog:
+        t = prog.add_task("eval")
+        report = _run(run_evals(cfg))
+        prog.update(t, completed=True)
+
+    print_report(report)
+
+
+# ---------------------------------------------------------------------------
 # mymem serve
 # ---------------------------------------------------------------------------
 

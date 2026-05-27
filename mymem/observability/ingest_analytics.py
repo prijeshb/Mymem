@@ -24,16 +24,18 @@ log = get_logger(__name__)
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS ingest_analytics (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at        TEXT    NOT NULL,
-    source_type       TEXT    NOT NULL,
-    metadata_enriched INTEGER NOT NULL DEFAULT 0,  -- 1 = yt-dlp enriched, 0 = plain
-    source_chars      INTEGER NOT NULL DEFAULT 0,  -- chars sent to LLM
-    concepts_extracted INTEGER NOT NULL DEFAULT 0,
-    pages_written     INTEGER NOT NULL DEFAULT 0,
-    pages_updated     INTEGER NOT NULL DEFAULT 0,
-    avg_page_chars    REAL    NOT NULL DEFAULT 0,  -- avg body length of generated pages
-    avg_wikilinks     REAL    NOT NULL DEFAULT 0   -- avg [[wikilinks]] per generated page
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at          TEXT    NOT NULL,
+    source_type         TEXT    NOT NULL,
+    metadata_enriched   INTEGER NOT NULL DEFAULT 0,
+    source_chars        INTEGER NOT NULL DEFAULT 0,
+    concepts_extracted  INTEGER NOT NULL DEFAULT 0,
+    pages_written       INTEGER NOT NULL DEFAULT 0,
+    pages_updated       INTEGER NOT NULL DEFAULT 0,
+    avg_page_chars      REAL    NOT NULL DEFAULT 0,
+    avg_wikilinks       REAL    NOT NULL DEFAULT 0,
+    chunk_count         INTEGER NOT NULL DEFAULT 1,
+    idea_duplicate_rate REAL    NOT NULL DEFAULT 0
 )
 """
 
@@ -42,17 +44,24 @@ CREATE INDEX IF NOT EXISTS idx_ia_source_type
     ON ingest_analytics(source_type, metadata_enriched)
 """
 
+_MIGRATIONS = [
+    "ALTER TABLE ingest_analytics ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE ingest_analytics ADD COLUMN idea_duplicate_rate REAL NOT NULL DEFAULT 0",
+]
+
 
 @dataclass
 class IngestRecord:
-    source_type:        str
-    metadata_enriched:  bool
-    source_chars:       int
-    concepts_extracted: int
-    pages_written:      int
-    pages_updated:      int
-    avg_page_chars:     float
-    avg_wikilinks:      float
+    source_type:         str
+    metadata_enriched:   bool
+    source_chars:        int
+    concepts_extracted:  int
+    pages_written:       int
+    pages_updated:       int
+    avg_page_chars:      float
+    avg_wikilinks:       float
+    chunk_count:         int = 1
+    idea_duplicate_rate: float = 0.0
 
 
 @dataclass
@@ -77,6 +86,11 @@ def _ensure_table(db_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         conn.execute(_CREATE_TABLE)
         conn.execute(_CREATE_IDX)
+        for migration in _MIGRATIONS:
+            try:
+                conn.execute(migration)
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +108,8 @@ def record_ingest(
     pages_updated: int,
     avg_page_chars: float,
     avg_wikilinks: float,
+    chunk_count: int = 1,
+    idea_duplicate_rate: float = 0.0,
 ) -> None:
     """Persist one ingest quality record. Silent on failure."""
     try:
@@ -103,8 +119,8 @@ def record_ingest(
                 """INSERT INTO ingest_analytics
                    (created_at, source_type, metadata_enriched, source_chars,
                     concepts_extracted, pages_written, pages_updated,
-                    avg_page_chars, avg_wikilinks)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                    avg_page_chars, avg_wikilinks, chunk_count, idea_duplicate_rate)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     datetime.now(UTC).isoformat(timespec="seconds"),
                     source_type,
@@ -115,6 +131,8 @@ def record_ingest(
                     pages_updated,
                     avg_page_chars,
                     avg_wikilinks,
+                    chunk_count,
+                    idea_duplicate_rate,
                 ),
             )
         log.debug(

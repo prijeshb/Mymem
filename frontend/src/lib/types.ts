@@ -169,3 +169,28 @@ export interface LogEntry {
   description: string;
   affected_pages: string[];
 }
+
+export interface QuizQuestion {
+  question:   string;
+  page_title: string;
+  hint:       string;
+  difficulty: 'easy' | 'medium' | 'hard';
+}
+
+export interface DigestTheme {
+  theme:   string;
+  pages:   string[];
+  insight: string;
+}
+
+export interface DigestResult {
+  period_days:          number;
+  date_range:           string;
+  pages_active:         number;
+  queries_made:         number;
+  themes:               DigestTheme[];
+  emerging_connections: string[];
+  knowledge_gaps:       string[];
+  serendipity:          string;
+  open_question:        string;
+}

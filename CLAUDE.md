@@ -288,9 +288,18 @@ Browser → FastAPI (:7860) [production]
 | `GET /api/page/:slug` | Single page data (title, body, domain, tags, backlinks, toc) |
 | `PATCH /api/page/:slug` | Update domain + tags on a wiki page |
 | `GET /api/log` | Recent wiki log entries |
+| `GET /api/heatmap` | 16-week activity heatmap data |
 | `GET /api/lint` | Lint issues as JSON |
 | `GET /api/introspect` | Today's summary + recommendations as JSON |
+| `GET /api/introspect/questions` | Generate N quiz questions from recent wiki pages |
+| `GET /api/introspect/digest` | Knowledge digest for last N days (themes, gaps, connections) |
 | `GET /api/curiosity` | Top domains, tags, trend direction (rising/fading) |
+| `GET /api/daily` | Recent daily summaries list |
+| `GET /api/archived` | Archived pages list |
+| `DELETE /api/page/:slug` | Delete a wiki page |
+| `POST /api/page/:slug/archive` | Archive a wiki page |
+| `POST /api/page/:slug/restore` | Restore an archived page |
+| `GET /api/related-web` | SSE stream of web links for page concepts |
 
 ### Ontology Graph (planned — not in initial build)
 
@@ -330,23 +339,29 @@ Relationship types: `is-a`, `part-of`, `related-to`, `contradicts`, `supports`, 
 | `mymem/wiki/index.py` | DONE |
 | `mymem/wiki/log.py` | DONE |
 | `mymem/pipeline/llm.py` | DONE |
-| `mymem/pipeline/router.py` | DONE |
+| `mymem/pipeline/router/` | DONE — package: `_router`, `_chain`, `_cost`, `_registry`, `_types`, `_utils` |
 | `mymem/pipeline/splitter.py` | DONE |
 | `mymem/pipeline/search.py` | DONE — DDG + Wikipedia fallback + TF-IDF Phase 2 |
-| `mymem/pipeline/ingest.py` | DONE — auto RAG-indexes local PDFs after wiki generation |
-| `mymem/pipeline/query.py` | DONE — hybrid wiki + RAG vector retrieval |
+| `mymem/pipeline/ingest.py` | DONE — PDFs RAG-only; uploaded files persist to `raw/<subdir>/`; auto wiki RAG index |
+| `mymem/pipeline/query.py` | DONE — hybrid wiki keyword + RAG vector retrieval |
 | `mymem/pipeline/lint.py` | DONE |
 | `mymem/pipeline/introspect.py` | DONE |
 | `mymem/cli.py` | DONE |
-| `mymem/rag/store.py` | DONE — sqlite-vec chunk store (100% tested) |
-| `mymem/rag/pdf_parser.py` | DONE — pypdf extraction + sliding-window chunking (100% tested) |
+| `mymem/observability/ingest_analytics.py` | DONE — YouTube ingest quality tracking |
+| `mymem/rag/store.py` | DONE — sqlite-vec chunk store + `delete_source()` (100% tested) |
+| `mymem/rag/pdf_parser.py` | DONE — pypdf + sliding-window chunking (V1-0003: upgrade to layout-aware in progress) |
 | `mymem/rag/embedder.py` | DONE — Ollama nomic-embed-text, 768-dim (96% tested) |
-| `mymem/rag/ingest.py` | DONE — orchestrates parse → embed → store (100% tested) |
-| `mymem/web/routes/api.py` | DONE — all JSON endpoints incl. delete/archive/restore/rag |
-| `mymem/web/app.py` | DONE — serves SPA or Jinja2 fallback |
+| `mymem/rag/ingest.py` | DONE — `ingest_wiki_page(force)` + PDF orchestration (100% tested) |
+| `mymem/rag/wiki_chunker.py` | DONE — markdown/header + parent-child chunking for wiki pages |
+| `mymem/web/routes/api.py` | DONE — all JSON endpoints incl. delete/archive/restore/rag/questions/digest |
+| `mymem/web/routes/logs.py` | DONE — `GET /api/log` + `GET /api/heatmap` (extracted from api.py) |
+| `mymem/web/app.py` | DONE — `--dev` flag for CORS + reload; serves SPA or Jinja2 fallback |
 | `mymem/web/routes/pages.py` | LEGACY — Jinja2 fallback only |
 | `mymem/web/templates/` | LEGACY — replaced by React SPA |
 | `frontend/` | DONE — React + TypeScript SPA, built to `frontend/dist/` |
+| `frontend/src/pages/DashboardPage.tsx` | DONE — 3-column chat layout: domain sidebar + chat thread + wiki panel |
+| `frontend/src/pages/IntrospectPage.tsx` | DONE — daily summary, research topic, quiz generator, knowledge digest, curiosity trends |
+| `frontend/src/components/Navbar.tsx` | DONE — gradient logo mark, nav right, search hidden |
 | `data/curiosity.db` | DONE — schema created on first run |
 | `data/rag.db` | DONE — created on first PDF ingest (sqlite-vec virtual table) |
 

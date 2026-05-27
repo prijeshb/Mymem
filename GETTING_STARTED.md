@@ -51,10 +51,25 @@ provider: anthropic
 ## 4. Start the Web UI
 
 ```bash
+# Production mode — serves built frontend
 mymem serve --port 7860
+
+# Dev mode — enables CORS for Vite dev server, hot-reload, no static serving
+mymem serve --port 7860 --dev
 ```
 
 Open **http://localhost:7860** in your browser.
+
+### Running frontend in dev mode (hot-reload)
+
+```bash
+# Terminal 1 — backend
+mymem serve --port 7860 --dev
+
+# Terminal 2 — frontend dev server (proxies /api → :7860)
+cd frontend
+npm run dev   # starts on http://localhost:5174
+```
 
 ---
 
@@ -113,14 +128,34 @@ pip install -e ".[media]"
 
 ---
 
-## 6. Run Tests
+## 6. RAG Search
+
+PDF files are automatically RAG-indexed when uploaded via the web UI or ingested via CLI:
+
+```bash
+mymem ingest raw/papers/my-paper.pdf --type paper   # indexes to rag.db, skips LLM wiki extraction
+```
+
+Wiki pages are also RAG-indexed automatically after every write. Queries use hybrid retrieval
+(keyword search over wiki + vector search over rag.db) and synthesize a final answer.
+
+The embedding model (`nomic-embed-text`) must be pulled in Ollama before first use:
+
+```bash
+ollama pull nomic-embed-text
+```
+
+---
+
+## 7. Run Tests
 
 ```bash
 pytest                                              # run all tests
 pytest --cov=mymem --cov-report=term-missing        # with coverage report
 ```
 
-Minimum required coverage: **80%** (100% for `lint.py`)
+Minimum required coverage: **80%** (100% for `lint.py`).
+All LLM calls are mocked — no running Ollama or API key needed for tests.
 
 ---
 

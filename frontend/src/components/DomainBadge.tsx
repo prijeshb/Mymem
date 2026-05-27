@@ -1,6 +1,6 @@
 import { Chip } from '@heroui/react';
 
-const DOMAIN_CLASSES: Record<string, string> = {
+export const DOMAIN_CLASSES: Record<string, string> = {
   tech:      'bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300',
   spiritual: 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300',
   finance:   'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300',
