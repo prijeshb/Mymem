@@ -634,6 +634,19 @@ async def ingest_source(
             wiki_dir=wiki_dir,
         )
 
+    # Background extraction consensus eval (fire-and-forget, never blocks ingest)
+    if db_path and all_ideas:
+        asyncio.ensure_future(
+            _eval_extraction_background(
+                source_name=source_name,
+                source_type=source_type,
+                source_text=source_text,
+                pipeline_ideas=all_ideas,
+                router=router,
+                db_path=db_path,
+            )
+        )
+
     return result
 
 
@@ -788,3 +801,91 @@ def _strip_frontmatter(text: str) -> str:
     """Remove YAML frontmatter block if the LLM accidentally included it."""
     import re
     return re.sub(r"^---\n.*?\n---\n?", "", text, flags=re.DOTALL).lstrip()
+
+
+async def _eval_extraction_background(
+    *,
+    source_name: str,
+    source_type: str,
+    source_text: str,
+    pipeline_ideas: list[dict[str, object]],
+    router: "ModelRouter",
+    db_path: Path,
+) -> None:
+    """
+    Fire-and-forget background task: run reference LLM extraction and score consensus.
+    Skips silently if GROQ_API_KEY / GEMINI_API_KEY is not configured.
+    Never raises — all errors are logged and swallowed.
+    """
+    try:
+        from mymem.config import get_settings
+        from mymem.evals.extraction_consensus import (
+            GROQ_DEFAULT_MODEL,
+            NVIDIA_DEFAULT_MODEL,
+            run_extraction_consensus,
+        )
+        from mymem.evals.store import save_extraction_consensus
+        from mymem.pipeline.llm import complete
+
+        settings = get_settings()
+        provider = settings.eval_reference_provider
+
+        if provider == "groq":
+            api_key = settings.groq_api_key
+            ref_model = GROQ_DEFAULT_MODEL
+        elif provider == "gemini":
+            api_key = settings.gemini_api_key
+            ref_model = "gemini-2.0-flash"
+        elif provider == "nvidia":
+            api_key = settings.nvidia_api_key
+            ref_model = NVIDIA_DEFAULT_MODEL
+        else:
+            api_key = None
+            ref_model = ""
+
+        if not api_key:
+            log.debug(
+                "Extraction eval skipped — no API key for reference provider",
+                provider=provider,
+            )
+            return
+
+        async def _llm_fn(prompt: str, *, model: str, system: str, max_tokens: int) -> str:
+            return await complete(
+                prompt,
+                model=model,
+                provider=provider,
+                system=system,
+                max_tokens=max_tokens,
+                groq_api_key=api_key if provider == "groq" else "",
+                gemini_api_key=api_key if provider == "gemini" else "",
+                nvidia_api_key=api_key if provider == "nvidia" else "",
+            )
+
+        pipeline_model = router.task_router.model_for("compile") if hasattr(router, "task_router") else "unknown"
+
+        result = await run_extraction_consensus(
+            source_id=source_name,
+            source_type=source_type,
+            source_text=source_text,
+            pipeline_ideas=[dict(i) for i in pipeline_ideas],
+            pipeline_model=pipeline_model,
+            reference_model=ref_model,
+            llm_fn=_llm_fn,
+        )
+
+        evals_db = db_path.parent / "evals.db"
+        save_extraction_consensus(evals_db, result)
+        log.info(
+            "Extraction consensus eval complete",
+            source=source_name,
+            grade=result.grade,
+            consensus_score=result.consensus_score,
+            gaps=list(result.gaps),
+        )
+    except Exception as exc:
+        log.warning(
+            "Extraction consensus eval failed (background)",
+            source=source_name,
+            error=str(exc),
+        )

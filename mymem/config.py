@@ -88,11 +88,15 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    provider: Literal["anthropic", "ollama", "openai"] = "ollama"
+    provider: Literal["anthropic", "ollama", "openai", "nvidia"] = "ollama"
 
     # Secrets — from .env only, never config.yaml
     anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
+    gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
+    nvidia_api_key: str | None = Field(default=None, alias="NVIDIA_API_KEY")
+    eval_reference_provider: Literal["groq", "gemini", "nvidia"] = "groq"
 
     # Sub-configs populated by load_config()
     paths: PathsConfig = Field(default_factory=PathsConfig)
@@ -102,7 +106,7 @@ class Settings(BaseSettings):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
 
-    @field_validator("anthropic_api_key", "openai_api_key", mode="before")
+    @field_validator("anthropic_api_key", "openai_api_key", "nvidia_api_key", mode="before")
     @classmethod
     def _strip_whitespace(cls, v: str | None) -> str | None:
         return v.strip() if isinstance(v, str) else v
@@ -118,6 +122,11 @@ class Settings(BaseSettings):
         if self.provider == "openai" and not self.openai_api_key:
             raise ValueError(
                 "provider=openai but OPENAI_API_KEY is not set. "
+                "Add it to .env or switch provider to ollama in config.yaml."
+            )
+        if self.provider == "nvidia" and not self.nvidia_api_key:
+            raise ValueError(
+                "provider=nvidia but NVIDIA_API_KEY is not set. "
                 "Add it to .env or switch provider to ollama in config.yaml."
             )
         return self

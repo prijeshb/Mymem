@@ -1,9 +1,10 @@
 """ModelRouter: orchestrates task routing, fallback, and cost tracking."""
 from __future__ import annotations
 
-import time
+from pathlib import Path
 
 from mymem.observability.logger import get_logger
+from mymem.observability.tracer import trace_llm
 from mymem.pipeline.llm import complete
 from mymem.pipeline.router._types import (
     IFallbackChain, ICostTracker, IModelRegistry, ITaskRouter, LLMCallable,
@@ -53,10 +54,13 @@ class ModelRouter:
         provider: str = "ollama",
         anthropic_api_key: str = "",
         openai_api_key: str = "",
+        groq_api_key: str = "",
+        nvidia_api_key: str = "",
         ollama_base_url: str = "http://localhost:11434",
         ollama_timeout: int = 120,
         cost_alert_usd: float = 1.0,
         llm_fn: LLMCallable | None = None,
+        db_path: Path | None = None,
         # Injectable abstractions
         registry: IModelRegistry | None = None,
         fallback_chain: IFallbackChain | None = None,
@@ -65,9 +69,12 @@ class ModelRouter:
         self._provider       = provider
         self._ant_key        = anthropic_api_key
         self._oai_key        = openai_api_key
+        self._groq_key       = groq_api_key
+        self._nvidia_key     = nvidia_api_key
         self._ollama_url     = ollama_base_url
         self._ollama_timeout = ollama_timeout
         self._llm_fn         = llm_fn
+        self._db_path        = db_path
 
         self._task_router = ConfigTaskRouter(task_models)
         self._registry    = registry or DefaultModelRegistry()
@@ -122,36 +129,36 @@ class ModelRouter:
         for model in attempts:
             spec     = self._registry.get(model)
             provider = spec.provider if spec else self._provider
-            log.info("LLM call", task=task, model=model, provider=provider,
-                     prompt_chars=len(prompt))
-            t0 = time.monotonic()
             try:
-                result = await complete(
-                    prompt,
-                    model=model,
-                    provider=provider,
-                    system=system,
-                    max_tokens=max_tokens,
-                    ollama_base_url=self._ollama_url,
-                    ollama_timeout=self._ollama_timeout,
-                    anthropic_api_key=self._ant_key,
-                    openai_api_key=self._oai_key,
-                )
-                elapsed = round(time.monotonic() - t0, 2)
-                self._cost.record(model, estimate_tokens(prompt), estimate_tokens(result), self._registry)
+                with trace_llm(task, model, provider,
+                               db_path=self._db_path,
+                               cost_alert_usd=self._cost.alert_threshold()) as t:
+                    result = await complete(
+                        prompt,
+                        model=model,
+                        provider=provider,
+                        system=system,
+                        max_tokens=max_tokens,
+                        ollama_base_url=self._ollama_url,
+                        ollama_timeout=self._ollama_timeout,
+                        anthropic_api_key=self._ant_key,
+                        openai_api_key=self._oai_key,
+                        groq_api_key=self._groq_key,
+                        nvidia_api_key=self._nvidia_key,
+                    )
+                    in_tokens  = estimate_tokens(prompt)
+                    out_tokens = estimate_tokens(result)
+                    t.record(input_tokens=in_tokens, output_tokens=out_tokens)
+                self._cost.record(model, in_tokens, out_tokens, self._registry)
                 if self._cost.session_total() >= self._cost.alert_threshold():
                     log.warning(
                         "Session cost $%.4f reached alert threshold $%.2f",
                         self._cost.session_total(), self._cost.alert_threshold(),
                     )
-                log.info("LLM call complete", task=task, model=model, elapsed_s=elapsed,
-                         response_chars=len(result),
-                         session_cost=f"${self._cost.session_total():.4f}")
                 return result
             except Exception as exc:
-                elapsed = round(time.monotonic() - t0, 2)
                 log.warning("Model failed — trying fallback", exc_info=True,
-                            model=model, task=task, elapsed_s=elapsed, error=str(exc))
+                            model=model, task=task, error=str(exc))
                 last_exc = exc
 
         log.error("All models exhausted", task=task, tried=str(attempts))
@@ -176,8 +183,11 @@ def router_from_settings(settings: object, llm_fn: LLMCallable | None = None) ->
         provider=s.provider,
         anthropic_api_key=s.anthropic_api_key or "",
         openai_api_key=s.openai_api_key or "",
+        groq_api_key=s.groq_api_key or "",
+        nvidia_api_key=s.nvidia_api_key or "",
         ollama_base_url=s.ollama.base_url,
         ollama_timeout=s.ollama.timeout_s,
         cost_alert_usd=s.observability.cost_alert_usd,
         llm_fn=llm_fn,
+        db_path=s.paths.db if s.observability.trace_llm_calls else None,
     )

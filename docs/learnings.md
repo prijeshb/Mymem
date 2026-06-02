@@ -238,3 +238,68 @@ tags: [ml, embeddings]
 modified: 2026-05-05
 text: <300-800 token chunk>
 ```
+
+---
+
+## [2026-06-01] Agent Decomposition — Tool Calls vs Micro-Agents
+
+**Context:** Researched how to break the monolithic ingest/query/eval/introspect pipelines into agents.
+
+**First design (wrong):** 14 micro-agents — one per pipeline stage (SourceReaderAgent, SecurityScannerAgent, ChunkerAgent, IdeaExtractorAgent, PageCompilerAgent, etc.). Each was a separate agent class with message-passing between them.
+
+**Why it was wrong:**
+- In PydanticAI, `@agent.tool def read_source(...)` IS the SourceReaderAgent. The LLM calls tools at runtime — there's no need for a separate agent class per stage.
+- Micro-agents-as-pipeline-stages is the LangChain/graph mental model, not the tool-call mental model.
+- Over-engineering: a ChunkerAgent that has no LLM and no tool calls is just a function — calling it an "agent" adds zero value.
+
+**Correct design: 4 agents + 2 background subagents**
+
+| Type | Name | Has LLM? | How it works |
+|------|------|----------|-------------|
+| Agent | `IngestAgent` | Yes | LLM calls tools: read, scan, extract, write, index |
+| Agent | `QueryAgent` | Yes | LLM calls tools: search_index, search_rag, synthesize |
+| Agent | `EvalAgent` | Optional | LLM calls tools: quality, retrieval, ragas judge |
+| Agent | `IntrospectAgent` | Yes | LLM calls tools: read_log, curiosity, summarize |
+| Subagent | `RagIndexSubagent` | No | Plain async function — no reasoning needed |
+| Subagent | `ExtractionEvalSubagent` | No (uses reference model directly) | Plain async function |
+
+**Rule learned: background work is not an agent.** If a task doesn't require LLM reasoning to decide what to do next, it's a function, not an agent. RAG indexing and extraction eval run deterministically once triggered — they belong in `background.py` as plain `async def`, wrapped in `_run_background()` for failure isolation.
+
+**Framework chosen: PydanticAI** over LangGraph/CrewAI:
+- Async-first, strict mypy, zero hidden globals
+- `@agent.tool` replaces manual dispatch tables
+- Injects `ModelRouter` as a dependency — no provider lock-in
+- `TestModel` from `pydantic_ai.models.test` enables full agent tests without hitting Ollama
+
+**Migration is two phases:**
+1. Phase 1 (stdlib only): replace sequential loops with `asyncio.TaskGroup`, parallelize Index+RAG search, replace `ensure_future()` with `_run_background()`
+2. Phase 2 (PydanticAI): extract 4 agents + 2 subagents into `mymem/agents/` (6 files total)
+
+**Lessons:**
+- Tool calls replace micro-agents. One capable agent with N tools beats N single-purpose mini-agents.
+- Ask "does this need LLM reasoning to decide what to do?" — if no, it's a function, not an agent.
+- Phase 1 (TaskGroup parallelism) delivers most of the latency win with zero new dependencies.
+- Always count agents before finalising an architecture — if you have more agents than LLM-reasoning steps, you have too many.
+
+---
+
+## [2026-06-01] Storage Format — Markdown vs HTML for LLM Wikis
+
+**Decision:** Store wiki pages as Markdown + YAML frontmatter. Never HTML.
+
+**Why:** Markdown is 60–90% more token-efficient than HTML. LLMs write correct Markdown more reliably than well-formed HTML. YAML frontmatter parses with `yaml.safe_load()` — one line. HTML metadata requires DOM parsing or fragile regex. Every major LLM-powered wiki (Obsidian, Logseq, Foam, Karpathy's LLM Wiki) uses Markdown.
+
+**Rule:** HTML is a rendering target (React + marked.js), never a storage format.
+
+---
+
+## [2026-06-01] Obsidian Integration — Zero Code Required
+
+**Finding:** MyMem's `wiki/` directory and Obsidian vaults use identical formats (Markdown + YAML frontmatter + `[[wikilinks]]`). No sync layer, no file watcher, no plugin needed.
+
+**Integration:** Open Obsidian → "Open folder as vault" → `wiki/`. Or create a Windows directory junction (no admin needed):
+```
+mymem obsidian setup --vault-path PATH
+```
+
+**Lesson:** Before building an integration, check if the formats are already compatible. "Integration" sometimes means pointing at the existing folder.

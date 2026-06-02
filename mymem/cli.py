@@ -19,7 +19,9 @@ from rich.panel import Panel
 from rich.progress import Progress, TextColumn
 from rich.table import Table
 
-app     = typer.Typer(name="mymem", help="Personal LLM-powered knowledge base.", add_completion=False)
+app          = typer.Typer(name="mymem", help="Personal LLM-powered knowledge base.", add_completion=False)
+obsidian_app = typer.Typer(name="obsidian", help="Obsidian vault integration.")
+app.add_typer(obsidian_app, name="obsidian")
 console = Console()
 err     = Console(stderr=True, style="red")
 
@@ -56,8 +58,23 @@ def _paths(settings):  # type: ignore[return]
 
 
 def _run(coro):  # type: ignore[return]
-    """Run an async coroutine from sync Typer command."""
-    return asyncio.run(coro)
+    """Run an async coroutine from sync Typer command.
+
+    After the main coroutine completes, drains any background tasks that were
+    scheduled with asyncio.ensure_future / create_task (e.g. extraction eval).
+    Without this, asyncio.run() closes the loop before fire-and-forget tasks run.
+    """
+    async def _with_background_drain():
+        result = await coro
+        pending = [
+            t for t in asyncio.all_tasks()
+            if not t.done() and t is not asyncio.current_task()
+        ]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        return result
+
+    return asyncio.run(_with_background_drain())
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +382,63 @@ def eval(
 
 
 # ---------------------------------------------------------------------------
+# mymem eval review
+# ---------------------------------------------------------------------------
+
+@app.command("eval-review")
+def eval_review(
+    limit: int  = typer.Option(20, "--limit", "-n", help="Number of runs to show"),
+    fail_only: bool = typer.Option(False, "--fail-only", help="Show only FAIL grade runs"),
+) -> None:
+    """Review extraction consensus results — worst scoring ingests shown first."""
+    from mymem.evals.store import recent_consensus_runs
+    from rich.table import Table
+
+    db = Path("data/evals.db")
+    runs = recent_consensus_runs(db, limit=limit, order="worst_first")
+
+    if not runs:
+        console.print("[dim]No extraction consensus runs found. Ingest a source to generate results.[/dim]")
+        return
+
+    if fail_only:
+        runs = [r for r in runs if r["grade"] == "FAIL"]
+        if not runs:
+            console.print("[green]No FAIL runs found.[/green]")
+            return
+
+    table = Table(title="Extraction Consensus Review (worst first)", show_lines=True)
+    table.add_column("Source",          style="cyan",  max_width=30)
+    table.add_column("Type",            style="dim",   width=10)
+    table.add_column("Score",           justify="right", width=6)
+    table.add_column("Grade",           width=6)
+    table.add_column("Thesis",          width=7)
+    table.add_column("Gaps (reference found, pipeline missed)", style="yellow")
+
+    grade_color = {"PASS": "green", "WARN": "yellow", "FAIL": "red"}
+
+    for r in runs:
+        grade = r["grade"]
+        color = grade_color.get(grade, "white")
+        gaps_text = ", ".join(r["gaps"]) if r["gaps"] else "[dim]none[/dim]"
+        thesis_icon = "✓" if r["thesis_captured"] else "[red]✗[/red]"
+        table.add_row(
+            r["source_id"],
+            r["source_type"],
+            f"{r['consensus_score']:.2f}",
+            f"[{color}]{grade}[/]",
+            thesis_icon,
+            gaps_text,
+        )
+
+    console.print(table)
+    console.print(
+        f"\n[dim]Showing {len(runs)} runs. "
+        "Gaps = ideas the reference model found that the pipeline missed.[/dim]"
+    )
+
+
+# ---------------------------------------------------------------------------
 # mymem serve
 # ---------------------------------------------------------------------------
 
@@ -403,6 +477,107 @@ def serve(
         port=port,
         reload=dev,
         log_level="info" if dev else "warning",
+    )
+
+
+# ---------------------------------------------------------------------------
+# mymem obsidian
+# ---------------------------------------------------------------------------
+
+@obsidian_app.command("setup")
+def obsidian_setup(
+    vault_path: Optional[Path] = typer.Option(
+        None, "--vault-path", "-v",
+        help="Create a directory junction/symlink at this path pointing to wiki/. "
+             "Omit to just print the wiki folder path for manual setup.",
+    ),
+) -> None:
+    """Link wiki/ as an Obsidian vault (or print the path to open manually)."""
+    settings = _get_settings()
+    wiki_dir  = Path(settings.paths.wiki).resolve()
+
+    if not wiki_dir.exists():
+        err.print(f"wiki/ directory not found at {wiki_dir}. Run [bold]mymem ingest[/] first.")
+        raise typer.Exit(1)
+
+    page_count = len(list(wiki_dir.glob("*.md")))
+
+    if vault_path is None:
+        console.print(Panel(
+            f"[bold]Wiki path:[/bold] [cyan]{wiki_dir}[/cyan]\n\n"
+            "Open Obsidian -> [bold]Open folder as vault[/bold] -> select the path above.\n\n"
+            f"[dim]{page_count} markdown pages - YAML frontmatter + wikilinks natively supported.[/dim]\n\n"
+            "Or create a vault link:\n"
+            "  [bold]mymem obsidian setup --vault-path PATH[/bold]",
+            title="Obsidian Setup",
+        ))
+        return
+
+    vault_path = vault_path.resolve()
+    if vault_path.exists():
+        err.print(f"Target already exists: {vault_path}")
+        raise typer.Exit(1)
+
+    import platform
+    import subprocess
+
+    if platform.system() == "Windows":
+        # Directory junction requires no admin on Windows (unlike symlinks)
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(vault_path), str(wiki_dir)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            err.print(f"Failed to create junction: {result.stderr.strip()}")
+            raise typer.Exit(1)
+    else:
+        vault_path.symlink_to(wiki_dir)
+
+    console.print(Panel(
+        f"[green]Done.[/] Vault link created:\n"
+        f"  [cyan]{vault_path}[/] -> {wiki_dir}\n\n"
+        "Open Obsidian -> [bold]Open folder as vault[/bold] -> select:\n"
+        f"  [cyan]{vault_path}[/cyan]",
+        title="[bold green]Obsidian Setup Complete[/]",
+    ))
+
+
+@obsidian_app.command("status")
+def obsidian_status() -> None:
+    """Show wiki compatibility info for Obsidian."""
+    settings = _get_settings()
+    wiki_dir  = Path(settings.paths.wiki).resolve()
+
+    if not wiki_dir.exists():
+        err.print(f"wiki/ directory not found at {wiki_dir}.")
+        raise typer.Exit(1)
+
+    pages = list(wiki_dir.glob("*.md"))
+    pages_with_fm = 0
+    pages_with_wikilinks = 0
+    for p in pages:
+        try:
+            content = p.read_text(encoding="utf-8", errors="ignore")
+            if content.startswith("---"):
+                pages_with_fm += 1
+            if "[[" in content:
+                pages_with_wikilinks += 1
+        except OSError:
+            pass
+
+    t = Table(show_header=False, box=None, padding=(0, 1))
+    t.add_row("[dim]Wiki path[/]",        str(wiki_dir))
+    t.add_row("[dim]Total pages[/]",      str(len(pages)))
+    t.add_row("[dim]With frontmatter[/]", f"[green]{pages_with_fm}[/] / {len(pages)}")
+    t.add_row("[dim]With wikilinks[/]",   f"[cyan]{pages_with_wikilinks}[/] / {len(pages)}")
+    t.add_row("[dim]Obsidian-ready[/]",   "[green]yes[/] YAML frontmatter + wikilinks natively supported")
+    console.print(Panel(t, title="Obsidian Status"))
+
+    console.print(
+        f"\n[bold]To open in Obsidian:[/bold]\n"
+        f"  Obsidian -> Open folder as vault -> [cyan]{wiki_dir}[/cyan]\n\n"
+        "[dim]Or: [bold]mymem obsidian setup --vault-path PATH[/bold] to create a junction[/dim]"
     )
 
 
