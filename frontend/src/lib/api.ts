@@ -2,7 +2,8 @@ import type {
   Page, PagedPages, Stats, GraphData, IngestResult, IntrospectResult,
   CuriosityResult, LintResult, SSEEvent, SourceType, Domain,
   WikiPageData, LogEntry, HeatmapData, DailySummary, ArchivedPage,
-  QuizQuestion, DigestResult,
+  QuizQuestion, DigestResult, TracesData, EvalRun,
+  EvalsExtractionResult, EvalGrade,
 } from './types';
 
 // In dev Vite proxies /api/* → :7860; in prod FastAPI serves everything
@@ -144,6 +145,30 @@ export async function fetchDigest(period = 7): Promise<DigestResult> {
 export async function fetchDailySummaries(limit = 14): Promise<DailySummary[]> {
   const res = await fetch(`${BASE}/api/daily?limit=${limit}`);
   if (!res.ok) throw new Error(`GET /api/daily: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchTraces(limit = 50): Promise<TracesData> {
+  const res = await fetch(`${BASE}/api/traces?limit=${limit}`);
+  if (!res.ok) throw new Error(`GET /api/traces: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchEvalsSummary(): Promise<Record<string, EvalRun>> {
+  const res = await fetch(`${BASE}/api/evals/summary`);
+  if (!res.ok) throw new Error(`GET /api/evals/summary: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchEvalsExtraction(
+  limit = 50,
+  order: 'recent_first' | 'worst_first' = 'recent_first',
+  grade: EvalGrade | '' = '',
+): Promise<EvalsExtractionResult> {
+  const p = new URLSearchParams({ limit: String(limit), order });
+  if (grade) p.set('grade', grade);
+  const res = await fetch(`${BASE}/api/evals/extraction?${p}`);
+  if (!res.ok) throw new Error(`GET /api/evals/extraction: ${res.status}`);
   return res.json();
 }
 

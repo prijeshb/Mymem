@@ -11,16 +11,20 @@ import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import random
+
 from mymem.evals import chunking as chunking_mod
 from mymem.evals import ingest_quality as iq_mod
 from mymem.evals import retrieval as ret_mod
 from mymem.evals.chunking import ChunkingReport
 from mymem.evals.confidence import score_confidence
 from mymem.evals.ingest_quality import WikiQualityReport
+from mymem.evals.ragas_lite import RagasResult, run_ragas_eval
 from mymem.evals.retrieval import RetrievalReport, generate_self_supervised_cases, load_cases
 from mymem.evals.store import save_run
 from mymem.observability.logger import get_logger
 from mymem.wiki.page import list_pages
+from mymem.wiki.types import WikiPage
 
 log = get_logger(__name__)
 
@@ -35,6 +39,7 @@ class EvalConfig:
     run_retrieval: bool = True
     run_llm_judge: bool = False
     router: object = None           # ModelRouter — required only for llm-judge
+    ragas_n: int = 5                # pages to sample for RAGAS-lite
     # Sample text for chunk ablation (if None, uses longest wiki page body)
     chunk_sample_text: str | None = None
 
@@ -76,9 +81,71 @@ class EvalReport:
                 "recommended_max_tokens": best.max_tokens if best else None,
                 "current_max_tokens": self.chunking.current_max_tokens,
             }
+        if self.ragas_results:
+            scores = [r.overall for r in self.ragas_results if r.overall is not None]
+            out["ragas"] = {
+                "n_cases": len(self.ragas_results),
+                "mean_overall": round(sum(scores) / len(scores), 3) if scores else 0.0,
+                "skipped": sum(1 for r in self.ragas_results if r.skipped),
+            }
         if self.skipped:
             out["skipped"] = self.skipped
         return out
+
+
+def _slug_to_question(slug: str) -> str:
+    return f"What is {slug.replace('-', ' ')}?"
+
+
+def _mean_field(results: list[RagasResult], field: str) -> float:
+    scores = []
+    for r in results:
+        sub = getattr(r, field, None)
+        if sub and not r.skipped:
+            val = getattr(sub, field, None)
+            if val is not None:
+                scores.append(float(val))
+    return round(sum(scores) / len(scores), 3) if scores else 0.0
+
+
+async def _run_ragas_cases(cfg: EvalConfig) -> list[RagasResult]:
+    """
+    Sample N wiki pages and evaluate each with RAGAS-lite.
+
+    Self-supervised Q&A:
+      question = "What is {slug as phrase}?"
+      context  = full page body (capped at 3000 chars)
+      answer   = first paragraph of the page body
+
+    This measures whether each wiki page body faithfully and relevantly
+    answers its own title question — no hand-curated test cases needed.
+    """
+    pages: list[WikiPage] = [
+        p for p in list_pages(cfg.wiki_dir)
+        if not p.archived and len(p.body or "") >= 200
+    ]
+    rng = random.Random(42)
+    sample = rng.sample(pages, min(cfg.ragas_n, len(pages)))
+
+    results: list[RagasResult] = []
+    for page in sample:
+        body = page.body or ""
+        question = _slug_to_question(page.slug)
+        context = body[:3000]
+        # First non-empty paragraph as the evaluated answer
+        paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
+        answer = paragraphs[0] if paragraphs else body[:500]
+
+        result = await run_ragas_eval(question, context, answer, cfg.router)
+        log.info(
+            "RAGAS case",
+            slug=page.slug,
+            overall=result.overall,
+            skipped=result.skipped,
+        )
+        results.append(result)
+
+    return results
 
 
 async def run_evals(cfg: EvalConfig) -> EvalReport:
@@ -171,7 +238,20 @@ async def run_evals(cfg: EvalConfig) -> EvalReport:
         if cfg.router is None:
             report.skipped.append("ragas: --llm-judge requires a router (run mymem eval --llm-judge)")
         else:
-            log.info("LLM-judge eval skipped — no test cases wired yet")
-            report.skipped.append("ragas: no Q&A test cases defined yet")
+            log.info("Running RAGAS-lite eval")
+            try:
+                ragas_results = await _run_ragas_cases(cfg)
+                report.ragas_results = ragas_results
+                scores = [r.overall for r in ragas_results if r.overall is not None]
+                save_run(evals_db, "ragas", {
+                    "n_cases": len(ragas_results),
+                    "n_scored": len(scores),
+                    "mean_overall": round(sum(scores) / len(scores), 3) if scores else 0.0,
+                    "mean_faithfulness": _mean_field(ragas_results, "faithfulness"),
+                    "mean_relevancy": _mean_field(ragas_results, "relevancy"),
+                })
+            except Exception as exc:
+                log.warning("RAGAS-lite eval failed", error=str(exc), exc_info=True)
+                report.skipped.append("ragas: eval failed (check logs)")
 
     return report

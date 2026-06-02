@@ -317,3 +317,4 @@ Body content with [[Related Concept]] wikilinks.
 | Ontology graph (typed relationships) | `feat_ontology_graph.md` | P2 |
 | Full input validation (wire security/validate.py) | `feat_input_validation.md` | P1 |
 | Phase 2 web search (TF-IDF + sklearn cosine) | `feat_web_search_phase2.md` | P2 |
+| Extraction quality eval + A/B comparison | `docs/PRD/extraction-eval.md` | P1 |

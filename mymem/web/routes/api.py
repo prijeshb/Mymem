@@ -917,6 +917,35 @@ async def api_evals_summary(request: Request) -> JSONResponse:
     return JSONResponse(latest_summary(evals_db))
 
 
+@router.get("/evals/history")
+async def api_evals_history(request: Request, limit: int = 30) -> JSONResponse:
+    """Historical eval runs per type — for trend charts in the dashboard."""
+    from mymem.evals.store import history_by_type
+
+    db_path = request.app.state.db_path
+    evals_db = db_path.parent / "evals.db"
+    return JSONResponse(history_by_type(evals_db, limit_per_type=max(1, min(limit, 100))))
+
+
+@router.get("/evals/extraction")
+async def api_evals_extraction(
+    request: Request,
+    limit: int = 50,
+    order: str = "recent_first",
+    grade: str = "",
+) -> JSONResponse:
+    """Extraction consensus eval runs — recent or worst-first, optional grade filter."""
+    from mymem.evals.store import recent_consensus_runs
+
+    db_path = request.app.state.db_path
+    evals_db = db_path.parent / "evals.db"
+    valid_order = order if order in ("recent_first", "worst_first") else "recent_first"
+    runs = recent_consensus_runs(evals_db, limit=max(1, min(limit, 200)), order=valid_order)
+    if grade in ("PASS", "WARN", "FAIL"):
+        runs = [r for r in runs if r["grade"] == grade]
+    return JSONResponse({"runs": runs, "total": len(runs)})
+
+
 @router.get("/curiosity")
 async def api_curiosity(request: Request, limit: int = 10) -> JSONResponse:
     curiosity_db = request.app.state.curiosity_db
@@ -943,3 +972,86 @@ async def api_rag_sources(request: Request) -> JSONResponse:
     from mymem.rag.store import list_sources
     sources = list_sources(rag_db)
     return JSONResponse({"sources": sources})
+
+
+# ---------------------------------------------------------------------------
+# GET /api/traces  — LLM call latency / cost breakdown
+# ---------------------------------------------------------------------------
+
+@router.get("/traces")
+async def api_traces(request: Request, limit: int = 50) -> JSONResponse:
+    """
+    Return recent LLM traces plus per-model and per-task aggregates.
+
+    Response shape:
+      recent   — last N rows from llm_traces, newest first
+      by_model — calls / avg_latency_ms / total_cost_usd / error_rate per model
+      by_task  — calls / avg_latency_ms / total_cost_usd per task
+      totals   — overall call count, cost, avg latency
+    """
+    import sqlite3
+
+    db_path: Path = request.app.state.db_path
+    if not db_path.exists():
+        return JSONResponse({"recent": [], "by_model": [], "by_task": [], "totals": {}})
+
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+
+            # Check table exists
+            tables = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+            if "llm_traces" not in tables:
+                return JSONResponse({"recent": [], "by_model": [], "by_task": [], "totals": {}})
+
+            recent = [
+                dict(row) for row in conn.execute(
+                    """SELECT id, task, model, provider, started_at,
+                              latency_ms, input_tokens, output_tokens, cost_usd, error
+                       FROM llm_traces
+                       ORDER BY id DESC LIMIT ?""",
+                    (max(1, min(limit, 500)),),
+                ).fetchall()
+            ]
+
+            by_model = [
+                dict(row) for row in conn.execute(
+                    """SELECT model,
+                              COUNT(*)                                    AS calls,
+                              ROUND(AVG(latency_ms), 1)                  AS avg_latency_ms,
+                              ROUND(SUM(cost_usd), 6)                    AS total_cost_usd,
+                              ROUND(SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END)
+                                    * 1.0 / COUNT(*), 3)                 AS error_rate
+                       FROM llm_traces
+                       GROUP BY model
+                       ORDER BY calls DESC""",
+                ).fetchall()
+            ]
+
+            by_task = [
+                dict(row) for row in conn.execute(
+                    """SELECT task,
+                              COUNT(*)                                    AS calls,
+                              ROUND(AVG(latency_ms), 1)                  AS avg_latency_ms,
+                              ROUND(SUM(cost_usd), 6)                    AS total_cost_usd
+                       FROM llm_traces
+                       GROUP BY task
+                       ORDER BY calls DESC""",
+                ).fetchall()
+            ]
+
+            totals_row = conn.execute(
+                """SELECT COUNT(*)                   AS calls,
+                          ROUND(SUM(cost_usd), 6)   AS total_cost_usd,
+                          ROUND(AVG(latency_ms), 1) AS avg_latency_ms
+                   FROM llm_traces"""
+            ).fetchone()
+            totals = dict(totals_row) if totals_row else {}
+
+    except Exception:
+        log.exception("Failed to read llm_traces")
+        raise HTTPException(status_code=500, detail="Failed to read trace data")
+
+    return JSONResponse({"recent": recent, "by_model": by_model, "by_task": by_task, "totals": totals})

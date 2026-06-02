@@ -63,10 +63,17 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 
 
 def init_db(db_path: Path) -> None:
-    """Create rag_chunks and rag_embeddings tables if they don't exist, and migrate."""
+    """Create rag_chunks, rag_embeddings, and rag_sources tables if they don't exist, and migrate."""
     conn = _connect(db_path)
     try:
         with conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS rag_sources (
+                    source_path  TEXT PRIMARY KEY,
+                    content_hash TEXT NOT NULL,
+                    indexed_at   TEXT NOT NULL
+                )
+            """)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS rag_chunks (
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,8 +185,14 @@ def search_similar(
     db_path: Path,
     query_embedding: list[float],
     top_k: int = 10,
+    domain: str | None = None,
 ) -> list[SearchResult]:
-    """Return the top-k chunks closest to query_embedding by cosine distance."""
+    """Return the top-k chunks closest to query_embedding by cosine distance.
+
+    When domain is given, fetches top_k*3 candidates from sqlite-vec and
+    filters in Python — safer than pushing the WHERE into the virtual table join.
+    """
+    fetch_k = top_k * 3 if domain else top_k
     conn = _connect(db_path)
     try:
         rows = conn.execute(
@@ -195,10 +208,10 @@ def search_similar(
               AND k = ?
             ORDER BY e.distance
             """,
-            (_serialize(query_embedding), top_k),
+            (_serialize(query_embedding), fetch_k),
         ).fetchall()
 
-        return [
+        results = [
             SearchResult(
                 chunk=RagChunk(
                     id=r["chunk_id"],
@@ -220,6 +233,44 @@ def search_similar(
             )
             for r in rows
         ]
+
+        if domain:
+            results = [r for r in results if r.chunk.domain == domain]
+
+        return results[:top_k]
+    finally:
+        conn.close()
+
+
+def get_source_hash(db_path: Path, source_path: str) -> str | None:
+    """Return the stored content hash for source_path, or None if not recorded."""
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT content_hash FROM rag_sources WHERE source_path = ?",
+            (source_path,),
+        ).fetchone()
+        return str(row["content_hash"]) if row else None
+    finally:
+        conn.close()
+
+
+def upsert_source_hash(db_path: Path, source_path: str, content_hash: str) -> None:
+    """Insert or update the content hash for a source."""
+    conn = _connect(db_path)
+    now = datetime.now(UTC).isoformat()
+    try:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO rag_sources (source_path, content_hash, indexed_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(source_path) DO UPDATE SET
+                    content_hash = excluded.content_hash,
+                    indexed_at   = excluded.indexed_at
+                """,
+                (source_path, content_hash, now),
+            )
     finally:
         conn.close()
 

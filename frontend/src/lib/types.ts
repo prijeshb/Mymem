@@ -194,3 +194,72 @@ export interface DigestResult {
   serendipity:          string;
   open_question:        string;
 }
+
+export interface TraceRow {
+  id:            number;
+  task:          string;
+  model:         string;
+  provider:      string;
+  started_at:    string;
+  latency_ms:    number;
+  input_tokens:  number;
+  output_tokens: number;
+  cost_usd:      number;
+  error:         string | null;
+}
+
+export interface TraceByModel {
+  model:          string;
+  calls:          number;
+  avg_latency_ms: number;
+  total_cost_usd: number;
+  error_rate:     number;
+}
+
+export interface TraceByTask {
+  task:           string;
+  calls:          number;
+  avg_latency_ms: number;
+  total_cost_usd: number;
+}
+
+export interface TracesTotals {
+  calls:          number | null;
+  total_cost_usd: number | null;
+  avg_latency_ms: number | null;
+}
+
+export interface TracesData {
+  recent:   TraceRow[];
+  by_model: TraceByModel[];
+  by_task:  TraceByTask[];
+  totals:   TracesTotals;
+}
+
+export interface EvalRun {
+  id:        number;
+  run_at:    string;
+  eval_type: string;
+  summary:   Record<string, unknown>;
+}
+
+export type EvalGrade = 'PASS' | 'WARN' | 'FAIL';
+
+export interface ExtractionConsensusRun {
+  id:               number;
+  run_at:           string;
+  source_id:        string;
+  source_type:      string;
+  pipeline_model:   string;
+  reference_model:  string;
+  consensus_score:  number;
+  thesis_captured:  boolean;
+  grade:            EvalGrade;
+  gaps:             string[];
+  false_positives:  string[];
+}
+
+export interface EvalsExtractionResult {
+  runs:  ExtractionConsensusRun[];
+  total: number;
+}

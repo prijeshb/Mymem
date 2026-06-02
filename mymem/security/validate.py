@@ -53,8 +53,8 @@ class IngestRequest(BaseModel):
         if not v:
             raise ValueError("source must not be empty")
 
-        # URL path
-        if v.startswith(("http://", "https://")):
+        # URL path — catch any scheme, not just http/https
+        if "://" in v:
             parsed = urlparse(v)
             if parsed.scheme not in _ALLOWED_URL_SCHEMES:
                 raise ValueError(f"URL scheme '{parsed.scheme}' not allowed (http/https only)")

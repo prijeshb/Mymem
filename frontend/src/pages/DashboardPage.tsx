@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { marked } from 'marked';
-import { fetchStats, fetchPagesPaged, streamQuery, titleToSlug } from '../lib/api';
-import type { Stats, Domain } from '../lib/types';
+import { fetchStats, fetchPagesPaged, streamQuery, titleToSlug, fetchTraces, fetchEvalsSummary } from '../lib/api';
+import type { Stats, Domain, TracesData, EvalRun } from '../lib/types';
 import { ALL_DOMAINS } from '../lib/types';
 import { DomainBadge, DOMAIN_CLASSES } from '../components/DomainBadge';
 import { CitationChip } from '../components/CitationChip';
@@ -64,6 +64,11 @@ export function DashboardPage() {
   const [loadingPages, setLoadingPages] = useState(true);
   const [error, setError]               = useState<string | null>(null);
 
+  const [rightTab, setRightTab]         = useState<'pages' | 'observe'>('pages');
+  const [traces, setTraces]             = useState<TracesData | null>(null);
+  const [evalSummary, setEvalSummary]   = useState<Record<string, EvalRun> | null>(null);
+  const [loadingObserve, setLoadingObserve] = useState(false);
+
   const inputRef  = useRef<HTMLInputElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
 
@@ -90,6 +95,15 @@ export function DashboardPage() {
   }, [pagesCurrent, filter]);
 
   useEffect(() => { setPagesCurrent(0); }, [filter]);
+
+  useEffect(() => {
+    if (rightTab !== 'observe' || traces !== null) return;
+    setLoadingObserve(true);
+    Promise.all([fetchTraces(50), fetchEvalsSummary()])
+      .then(([t, e]) => { setTraces(t); setEvalSummary(e); })
+      .catch(e => setError(String(e)))
+      .finally(() => setLoadingObserve(false));
+  }, [rightTab, traces]);
 
   async function ask() {
     const q = currentInput.trim();
@@ -386,39 +400,55 @@ export function DashboardPage() {
 
         {/* Tabs */}
         <div className="flex shrink-0 border-b border-gray-200 dark:border-gray-800">
-          <div className="flex-1 py-3 text-center text-sm font-semibold
-                          text-indigo-600 dark:text-indigo-400
-                          border-b-2 border-indigo-600 dark:border-indigo-400">
-            Wiki Pages
-          </div>
-          <button className="flex-1 py-3 text-center text-sm font-medium
-                             text-gray-400 hover:text-gray-600 dark:hover:text-gray-300
-                             border-b-2 border-transparent transition-colors">
-            Memory
-          </button>
+          {(['pages', 'observe'] as const).map(t => (
+            <button
+              key={t}
+              onClick={() => setRightTab(t)}
+              className={`flex-1 py-3 text-center text-sm font-medium transition-colors border-b-2
+                ${rightTab === t
+                  ? 'text-indigo-600 dark:text-indigo-400 border-indigo-600 dark:border-indigo-400 font-semibold'
+                  : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 border-transparent'
+                }`}
+            >
+              {t === 'pages' ? 'Wiki Pages' : 'Observe'}
+            </button>
+          ))}
         </div>
 
-        {/* Search */}
-        <div className="shrink-0 px-3 py-2.5 border-b border-gray-200 dark:border-gray-800">
-          <div className="flex items-center gap-2 bg-white dark:bg-gray-800/60
-                          rounded-lg border border-gray-200 dark:border-gray-700
-                          px-3 py-1.5">
-            <svg className="w-3.5 h-3.5 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-            </svg>
-            <input
-              value={filter}
-              onChange={e => setFilter(e.target.value)}
-              placeholder="Search wiki pages…"
-              className="flex-1 bg-transparent text-xs text-gray-700 dark:text-gray-300
-                         placeholder-gray-400 dark:placeholder-gray-500 outline-none"
-            />
+        {/* Search — pages tab only */}
+        {rightTab === 'pages' && (
+          <div className="shrink-0 px-3 py-2.5 border-b border-gray-200 dark:border-gray-800">
+            <div className="flex items-center gap-2 bg-white dark:bg-gray-800/60
+                            rounded-lg border border-gray-200 dark:border-gray-700
+                            px-3 py-1.5">
+              <svg className="w-3.5 h-3.5 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+              </svg>
+              <input
+                value={filter}
+                onChange={e => setFilter(e.target.value)}
+                placeholder="Search wiki pages…"
+                className="flex-1 bg-transparent text-xs text-gray-700 dark:text-gray-300
+                           placeholder-gray-400 dark:placeholder-gray-500 outline-none"
+              />
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Pages list */}
-        <div className="flex-1 overflow-y-auto">
+        {/* Observe panel */}
+        {rightTab === 'observe' && (
+          <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4">
+            {loadingObserve ? (
+              <div className="py-8 flex justify-center"><LoadingSpinner size="sm" /></div>
+            ) : (
+              <ObservePanel traces={traces} evalSummary={evalSummary} />
+            )}
+          </div>
+        )}
+
+        {/* Pages list — pages tab only */}
+        {rightTab === 'pages' && <div className="flex-1 overflow-y-auto">
           {loadingPages ? (
             <div className="py-8 flex justify-center"><LoadingSpinner size="sm" /></div>
           ) : pagedEntries.length === 0 ? (
@@ -482,8 +512,159 @@ export function DashboardPage() {
               )}
             </>
           )}
-        </div>
+        </div>}
       </div>
+    </div>
+  );
+}
+
+// ── ObservePanel ─────────────────────────────────────────────────────────────
+
+function ObservePanel({
+  traces,
+  evalSummary,
+}: {
+  traces: TracesData | null;
+  evalSummary: Record<string, EvalRun> | null;
+}) {
+  const GRADE_COLOR: Record<string, string> = {
+    PASS: 'text-emerald-600 dark:text-emerald-400',
+    WARN: 'text-yellow-600 dark:text-yellow-400',
+    FAIL: 'text-red-500 dark:text-red-400',
+  };
+
+  const noTraces = !traces || traces.by_model.length === 0;
+  const noEvals  = !evalSummary || Object.keys(evalSummary).length === 0;
+
+  if (noTraces && noEvals) {
+    return (
+      <div className="py-10 text-center text-xs text-gray-400 italic px-4">
+        No trace or eval data yet.
+        <br />Run <code className="font-mono">mymem eval</code> or make a query to populate.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+
+      {/* ── Traces totals ── */}
+      {traces && (traces.totals.calls ?? 0) > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-2">
+            LLM Calls (session)
+          </p>
+          <div className="grid grid-cols-3 gap-1.5">
+            {([
+              ['Calls',    traces.totals.calls,          ''],
+              ['Avg ms',   traces.totals.avg_latency_ms, ''],
+              ['Cost',     traces.totals.total_cost_usd !== null
+                             ? `$${Number(traces.totals.total_cost_usd).toFixed(4)}`
+                             : '—',                      ''],
+            ] as [string, number | null | string, string][]).map(([label, val]) => (
+              <div key={label} className="rounded-lg bg-gray-100 dark:bg-gray-800/60 py-2 px-1.5 text-center">
+                <div className="text-sm font-bold text-gray-900 dark:text-gray-100 leading-none truncate">
+                  {val === null ? '—' : String(val)}
+                </div>
+                <div className="text-[10px] text-gray-400 mt-0.5">{label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Per-model breakdown ── */}
+      {traces && traces.by_model.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-2">
+            By Model
+          </p>
+          <div className="space-y-1">
+            {traces.by_model.slice(0, 6).map(m => (
+              <div key={m.model}
+                   className="flex items-center gap-2 rounded-lg px-2.5 py-1.5
+                               bg-white dark:bg-gray-800/40 border border-gray-100 dark:border-gray-800">
+                <span className="flex-1 min-w-0 text-xs font-medium text-gray-700 dark:text-gray-300 truncate">
+                  {m.model.replace(':latest', '')}
+                </span>
+                <span className="text-[10px] text-gray-400 tabular-nums shrink-0">{m.calls}×</span>
+                <span className="text-[10px] text-gray-400 tabular-nums shrink-0">{m.avg_latency_ms}ms</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Eval summary ── */}
+      {evalSummary && Object.keys(evalSummary).length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-2">
+            Latest Evals
+          </p>
+          <div className="space-y-1.5">
+            {Object.entries(evalSummary).map(([type, run]) => {
+              const s = run.summary as Record<string, unknown>;
+              const grade = String(s.grade ?? '');
+              const when = run.run_at ? new Date(run.run_at).toLocaleDateString() : '';
+              return (
+                <div key={type}
+                     className="rounded-lg px-2.5 py-2 bg-white dark:bg-gray-800/40
+                                border border-gray-100 dark:border-gray-800">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 capitalize">
+                      {type.replace('_', ' ')}
+                    </span>
+                    {grade && (
+                      <span className={`text-[10px] font-bold ${GRADE_COLOR[grade] ?? 'text-gray-400'}`}>
+                        {grade}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    {s.precision_at_k !== undefined && (
+                      <span className="text-[10px] text-gray-500">
+                        P@5: <b className="text-gray-700 dark:text-gray-300">{Number(s.precision_at_k).toFixed(2)}</b>
+                      </span>
+                    )}
+                    {s.mean_richness !== undefined && (
+                      <span className="text-[10px] text-gray-500">
+                        richness: <b className="text-gray-700 dark:text-gray-300">{Number(s.mean_richness).toFixed(2)}</b>
+                      </span>
+                    )}
+                    {s.mean_overall !== undefined && (
+                      <span className="text-[10px] text-gray-500">
+                        overall: <b className="text-gray-700 dark:text-gray-300">{Number(s.mean_overall).toFixed(2)}</b>
+                      </span>
+                    )}
+                    {when && <span className="text-[10px] text-gray-400 ml-auto">{when}</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── Recent trace log ── */}
+      {traces && traces.recent.length > 0 && (
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-2">
+            Recent Calls
+          </p>
+          <div className="space-y-1">
+            {traces.recent.slice(0, 8).map(tr => (
+              <div key={tr.id}
+                   className="flex items-center gap-2 text-[10px] text-gray-500 dark:text-gray-400
+                               px-2 py-1 rounded hover:bg-gray-50 dark:hover:bg-gray-800/30">
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${tr.error ? 'bg-red-400' : 'bg-emerald-400'}`} />
+                <span className="font-medium text-gray-600 dark:text-gray-300 capitalize">{tr.task}</span>
+                <span className="flex-1 min-w-0 truncate text-gray-400">{tr.model.replace(':latest', '')}</span>
+                <span className="tabular-nums shrink-0">{Math.round(tr.latency_ms)}ms</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

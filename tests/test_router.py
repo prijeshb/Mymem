@@ -122,6 +122,43 @@ class TestModelRouter:
         router = ModelRouter()
         assert router.session_cost == 0.0
 
+    def test_db_path_stored(self, tmp_path):
+        db = tmp_path / "test.db"
+        router = ModelRouter(db_path=db)
+        assert router._db_path == db
+
+    def test_db_path_none_by_default(self):
+        router = ModelRouter()
+        assert router._db_path is None
+
+    @pytest.mark.asyncio
+    async def test_trace_written_to_db(self, tmp_path):
+        """trace_llm() persists a row to llm_traces when db_path is set."""
+        import sqlite3
+
+        db = tmp_path / "traces.db"
+
+        async def fake_llm(prompt: str, *, model: str, system: str, max_tokens: int) -> str:
+            return "traced response"
+
+        # llm_fn bypasses the real complete() but NOT trace_llm — we test the
+        # non-llm_fn path by using a patched complete instead.
+        from unittest.mock import AsyncMock, patch
+
+        with patch("mymem.pipeline.router._router.complete", new=AsyncMock(return_value="traced")):
+            router = ModelRouter(
+                task_models={"qa": "gemma3:4b"},
+                db_path=db,
+            )
+            result = await router.call("hello", task="qa")
+
+        assert result == "traced"
+        with sqlite3.connect(db) as conn:
+            rows = conn.execute("SELECT task, model FROM llm_traces").fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == "qa"
+        assert rows[0][1] == "gemma3:4b"
+
 
 # ---------------------------------------------------------------------------
 # ChunkSplitter

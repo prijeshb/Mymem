@@ -6,6 +6,7 @@ import { WikiPage }       from './pages/WikiPage';
 import { GraphPage }      from './pages/GraphPage';
 import { IngestPage }     from './pages/IngestPage';
 import { IntrospectPage } from './pages/IntrospectPage';
+import { EvalsPage }      from './pages/EvalsPage';
 import { NotFoundPage }   from './pages/NotFoundPage';
 
 export function App() {
@@ -20,6 +21,7 @@ export function App() {
           <Route path="/graph"      element={<GraphPage />} />
           <Route path="/ingest"     element={<IngestPage />} />
           <Route path="/introspect" element={<IntrospectPage />} />
+          <Route path="/evals"      element={<EvalsPage />} />
           <Route path="*"           element={<NotFoundPage />} />
         </Routes>
       </main>

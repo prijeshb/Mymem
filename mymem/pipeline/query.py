@@ -126,7 +126,12 @@ async def query_wiki(
 
     # 2b. RAG vector search — append PDF chunks to context
     if rag_db_path and rag_db_path.exists():
-        rag_chunks = await _fetch_rag_context(question, db_path=rag_db_path, top_k=rag_top_k)
+        rag_chunks = await _fetch_rag_context(
+            question,
+            db_path=rag_db_path,
+            top_k=rag_top_k,
+            domain=domain_filter.value if domain_filter else None,
+        )
         for label, body in rag_chunks:
             pages_content.append((label, body))
             citations.append(label)
@@ -196,11 +201,13 @@ async def _fetch_rag_context(
     *,
     db_path: Path,
     top_k: int,
+    domain: str | None = None,
 ) -> list[tuple[str, str]]:
-    """Embed the query and retrieve top-k PDF chunks from the RAG store.
+    """Embed the query and retrieve top-k chunks from the RAG store.
 
-    Returns a list of (label, text) pairs where label is
-    `[PDF: filename p.N]` — ready to be spliced into the LLM context.
+    Returns a list of (label, text) pairs ready to be spliced into LLM context.
+    Uses parent_text for wiki chunks (full section) and child text for PDF chunks.
+    Deduplicates by (source_slug, heading_path) so the same section doesn't appear twice.
     Never raises; returns empty list on any failure.
     """
     try:
@@ -210,13 +217,31 @@ async def _fetch_rag_context(
 
         settings = get_settings()
         query_vec = await embed_query(question, base_url=settings.ollama.base_url)
-        results = search_similar(db_path, query_vec, top_k=top_k)
-        context: list[tuple[str, str]] = []
+        results = search_similar(db_path, query_vec, top_k=top_k, domain=domain)
+
+        # Deduplicate: keep only the closest chunk per (source, section)
+        seen: set[tuple[str, str]] = set()
+        deduped = []
         for r in results:
+            key = (r.chunk.source_slug, r.chunk.heading_path or "")
+            if key not in seen:
+                seen.add(key)
+                deduped.append(r)
+
+        context: list[tuple[str, str]] = []
+        for r in deduped[:top_k]:
             filename = Path(r.chunk.source_path).name
-            page_label = f"p.{r.chunk.page_num}" if r.chunk.page_num else "p.?"
-            label = f"[PDF: {filename} {page_label}]"
-            context.append((label, r.chunk.text))
+            if r.chunk.page_title is None:
+                # PDF chunk — page_title is never set during PDF ingest
+                page_label = f"p.{r.chunk.page_num}" if r.chunk.page_num else "p.?"
+                label = f"[PDF: {filename} {page_label}]"
+                body = r.chunk.text
+            else:
+                # Wiki chunk — return full parent section for richer LLM context
+                heading = f" § {r.chunk.heading_path}" if r.chunk.heading_path else ""
+                label = f"[[{r.chunk.page_title}{heading}]]"
+                body = r.chunk.parent_text or r.chunk.text
+            context.append((label, body))
         return context
     except Exception as exc:
         log.warning("RAG context fetch failed", error=str(exc))

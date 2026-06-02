@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
 from mymem.observability.logger import get_logger
 from mymem.wiki.types import slugify
 
@@ -56,17 +58,21 @@ def _extract_frontmatter(content: str) -> tuple[dict[str, str], str]:
     fm_block = content[3:end].strip()
     body = content[end + 4:].lstrip()
 
-    meta: dict[str, str] = {}
-    for line in fm_block.splitlines():
-        if ":" in line:
-            key, _, val = line.partition(":")
-            meta[key.strip()] = val.strip()
+    try:
+        raw: dict[str, object] = yaml.safe_load(fm_block) or {}
+    except yaml.YAMLError as exc:
+        log.warning("wiki_chunker: invalid YAML frontmatter — skipping", error=str(exc))
+        return {}, body
 
-    # Normalise tags list: "[tag-a, tag-b]" → "tag-a,tag-b"
-    tags_raw = meta.get("tags", "")
-    tags_raw = tags_raw.strip("[]").replace('"', "").replace("'", "")
-    meta["tags"] = tags_raw
+    # Normalise tags list → comma-separated string
+    tags = raw.get("tags", [])
+    if isinstance(tags, list):
+        tags_str = ",".join(str(t) for t in tags)
+    else:
+        tags_str = str(tags) if tags else ""
 
+    meta: dict[str, str] = {k: str(v) for k, v in raw.items() if v is not None}
+    meta["tags"] = tags_str
     return meta, body
 
 

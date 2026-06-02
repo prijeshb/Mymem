@@ -67,6 +67,15 @@ export function Navbar() {
           >
             Introspect
           </Link>
+          <Link
+            to="/evals"
+            className="px-3 py-1.5 rounded-lg text-sm text-gray-500 dark:text-gray-400
+                       hover:text-gray-900 dark:hover:text-gray-100
+                       hover:bg-gray-100 dark:hover:bg-gray-800
+                       transition-colors outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+          >
+            Evals
+          </Link>
 
           {/* Search — hidden for now, keep for later */}
           <Link

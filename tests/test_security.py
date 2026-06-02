@@ -23,7 +23,8 @@ class TestSecretScanner:
         assert any(f.severity == Severity.HIGH for f in findings)
 
     def test_detects_github_token(self):
-        text = "token: ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ12345678"
+        # Classic GitHub PATs are ghp_ + 36 alphanumeric chars = 40 chars total
+        text = "token: ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890ab"
         findings = scan_for_secrets(text)
         assert any(f.rule == "github_token" for f in findings)
 
@@ -149,5 +150,6 @@ class TestArticleRef:
             ArticleRef(title="../secrets/config")
 
     def test_rejects_special_chars(self):
+        # Title contains < and > but no "/" so the regex check fires (not path-separator check)
         with pytest.raises(Exception, match="only contain"):
-            ArticleRef(title="article <script>alert(1)</script>")
+            ArticleRef(title="article <b>bold")

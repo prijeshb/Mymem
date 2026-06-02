@@ -1,0 +1,12 @@
+# Extraction quality ground truth dataset.
+# Populated via: mymem eval-review (approve ideas from consensus runs)
+#
+# Schema per entry:
+#   source_id:      str  — filename or URL used as identifier
+#   source_type:    str  — article | paper | youtube | etc.
+#   approved_at:    str  — ISO date when human approved
+#   verified_ideas:
+#     - title:      str  — concept title
+#       approved:   bool — true = confirmed good extraction
+#       note:       str  — optional: "pipeline missed this" etc.
+#   main_thesis_captured: bool

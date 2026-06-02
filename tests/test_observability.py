@@ -84,6 +84,7 @@ class TestTracer:
     def test_trace_llm_records_error(self):
         with pytest.raises(RuntimeError):
             with trace_llm("fail_task", "gemma3:4b", "ollama") as t:
+                time.sleep(0.005)  # ensure measurable elapsed time on all platforms
                 raise RuntimeError("model timeout")
 
         assert t.error == "model timeout"

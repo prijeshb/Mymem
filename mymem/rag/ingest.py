@@ -11,13 +11,21 @@ Flow:
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
 from mymem.observability.logger import get_logger
 from mymem.rag.embedder import embed_texts
 from mymem.rag.pdf_parser import parse_pdf
-from mymem.rag.store import delete_source, init_db, insert_chunks, source_exists
+from mymem.rag.store import (
+    delete_source,
+    get_source_hash,
+    init_db,
+    insert_chunks,
+    source_exists,
+    upsert_source_hash,
+)
 from mymem.wiki.types import slugify
 
 log = get_logger(__name__)
@@ -202,7 +210,13 @@ async def ingest_wiki_page(
     source_str = str(page_path.resolve())
     init_db(db_path)
 
+    content_hash = hashlib.sha256(page_path.read_bytes()).hexdigest()
+
     if force:
+        stored_hash = get_source_hash(db_path, source_str)
+        if stored_hash == content_hash:
+            log.info("RAG: wiki content unchanged — skipping re-index", source=source_str)
+            return RagIngestResult(source_path=source_str, skipped=True, skip_reason="content unchanged")
         deleted = delete_source(db_path, source_str)
         if deleted > 0:
             log.info("RAG: wiki re-index — cleared old chunks", source=source_str, deleted=deleted)
@@ -246,5 +260,6 @@ async def ingest_wiki_page(
         log.error("RAG: wiki store insert failed", source=source_str, error=str(exc))
         return RagIngestResult(source_path=source_str, error=f"Store insert failed: {exc}")
 
+    upsert_source_hash(db_path, source_str, content_hash)
     log.info("RAG: wiki indexed OK", source=source_str, chunks=len(wiki_chunks))
     return RagIngestResult(source_path=source_str, chunk_count=len(wiki_chunks))

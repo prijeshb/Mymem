@@ -59,12 +59,12 @@ class TestEmbedTexts:
         MockClient.return_value.embed.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_zero_fills_on_ollama_error(self):
+    async def test_raises_on_ollama_error(self):
         mock_client = MagicMock()
         mock_client.embed = AsyncMock(side_effect=ConnectionRefusedError("no ollama"))
         with patch("mymem.rag.embedder.AsyncClient", return_value=mock_client):
-            result = await embed_texts(["text"])
-        assert result == [_zero_vec()]
+            with pytest.raises(RuntimeError, match="Ollama embed failed"):
+                await embed_texts(["text"])
 
     @pytest.mark.asyncio
     async def test_batches_large_input(self):

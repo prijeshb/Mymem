@@ -46,13 +46,10 @@ async def embed_texts(
             resp = await client.embed(model=model, input=batch)
             results.extend(resp.embeddings)
         except Exception as exc:
-            log.warning(
-                "Ollama embed failed — zero-filling batch",
-                batch_start=i,
-                batch_size=len(batch),
-                error=str(exc),
-            )
-            results.extend([[0.0] * EMBED_DIM] * len(batch))
+            raise RuntimeError(
+                f"Ollama embed failed for batch starting at index {i} "
+                f"(model={model}, batch_size={len(batch)}): {exc}"
+            ) from exc
 
     return results
 

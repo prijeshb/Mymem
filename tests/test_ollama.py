@@ -63,11 +63,13 @@ async def test_ollama_chat_roundtrip() -> None:
     from ollama import AsyncClient
 
     r = httpx.get(f"{OLLAMA_BASE}/api/tags", timeout=5)
-    models = [m["name"] for m in r.json().get("models", [])]
-    if not models:
-        pytest.skip("No models pulled in Ollama — run: ollama pull <model>")
+    all_models = [m["name"] for m in r.json().get("models", [])]
+    # Embedding-only models (nomic-embed-text, mxbai-embed-*, etc.) don't support chat
+    chat_models = [m for m in all_models if "embed" not in m.lower()]
+    if not chat_models:
+        pytest.skip("No chat-capable models pulled in Ollama — run: ollama pull <model>")
 
-    model = models[0]
+    model = chat_models[0]
     print(f"\nTesting chat with model: {model}")
 
     client = AsyncClient(host=OLLAMA_BASE, timeout=30)
