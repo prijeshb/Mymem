@@ -14,7 +14,7 @@ from mymem.pipeline.ingest import (
     IngestResult, ingest_source, _parse_ideas, _strip_frontmatter,
     _is_youtube_url, _html_to_text, _read_source, _extract_video_id, _read_youtube,
     _format_duration, _format_chapters, _build_youtube_context, _fetch_youtube_metadata,
-    _rag_index_pdf,
+    _rag_index_pdf, _rank_extracted_ideas,
 )
 from mymem.pipeline.router import ModelRouter
 from mymem.wiki.index import IndexManager
@@ -268,6 +268,41 @@ class TestParseIdeas:
         result = _parse_ideas(raw)
         assert len(result) == 1
         assert result[0]["title"] == "T"
+
+
+class TestRankExtractedIdeas:
+    def test_promotes_repeated_cross_chunk_idea(self):
+        ideas = [
+            {"title": "Opening Detail", "summary": "A one-off detail from the introduction.", "tags": [], "domain": "misc"},
+            {"title": "GraphRAG Evaluation", "summary": "GraphRAG evals should focus on downstream question answering quality.", "tags": ["rag"], "domain": "tech"},
+            {"title": "Graph RAG Quality", "summary": "GraphRAG evaluation focuses on downstream QA usefulness over visual completeness.", "tags": ["eval"], "domain": "research"},
+        ]
+
+        selected = _rank_extracted_ideas(ideas, max_concepts=1, duplicate_threshold=0.35)
+
+        assert selected[0]["title"] in {"GraphRAG Evaluation", "Graph RAG Quality"}
+        assert selected[0]["tags"] == ["rag", "eval"]
+
+    def test_dedupes_even_when_under_limit(self):
+        ideas = [
+            {"title": "LLM Topic Extraction", "summary": "LLMs extract structured main ideas from text.", "tags": ["llm"], "domain": "tech"},
+            {"title": "LLM Topic Extraction", "summary": "LLMs can extract structured main ideas from text content.", "tags": ["topics"], "domain": "tech"},
+        ]
+
+        selected = _rank_extracted_ideas(ideas, max_concepts=3)
+
+        assert len(selected) == 1
+        assert selected[0]["tags"] == ["llm", "topics"]
+
+    def test_unique_ideas_keep_original_order(self):
+        ideas = [
+            {"title": "Alpha", "summary": "First unique idea.", "tags": [], "domain": "tech"},
+            {"title": "Beta", "summary": "Second unique idea.", "tags": [], "domain": "tech"},
+        ]
+
+        selected = _rank_extracted_ideas(ideas, max_concepts=2)
+
+        assert [idea["title"] for idea in selected] == ["Alpha", "Beta"]
 
 
 class TestStripFrontmatter:

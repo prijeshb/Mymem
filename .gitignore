@@ -56,7 +56,7 @@ desktop.ini
 
 # Claude Code
 .claude/
-
+.agents/
 # Node
 node_modules/
 frontend/dist/

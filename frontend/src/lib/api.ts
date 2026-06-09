@@ -9,6 +9,19 @@ import type {
 // In dev Vite proxies /api/* → :7860; in prod FastAPI serves everything
 const BASE = '';
 
+async function parseResponse<T>(res: Response, fallback: string): Promise<T> {
+  if (!res.ok) {
+    let detail = fallback;
+    try {
+      const text = await res.text();
+      try { detail = (JSON.parse(text) as { detail?: string }).detail ?? (text || fallback); }
+      catch { detail = text || fallback; }
+    } catch { /* ignore read error */ }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<T>;
+}
+
 // ── GET helpers ──────────────────────────────────────────────────────────────
 
 export async function fetchPages(domain?: Domain | '', tag?: string): Promise<Page[]> {
@@ -86,30 +99,22 @@ export async function patchPage(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ tags, domain }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.detail ?? 'Update failed');
-  return data;
+  return parseResponse<{ ok: boolean; tags: string[]; domain: string }>(res, 'Update failed');
 }
 
 export async function deletePage(slug: string): Promise<{ ok: boolean }> {
   const res = await fetch(`${BASE}/api/page/${slug}`, { method: 'DELETE' });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.detail ?? 'Delete failed');
-  return data;
+  return parseResponse<{ ok: boolean }>(res, 'Delete failed');
 }
 
 export async function archivePage(slug: string): Promise<{ ok: boolean }> {
   const res = await fetch(`${BASE}/api/page/${slug}/archive`, { method: 'POST' });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.detail ?? 'Archive failed');
-  return data;
+  return parseResponse<{ ok: boolean }>(res, 'Archive failed');
 }
 
 export async function restorePage(slug: string): Promise<{ ok: boolean }> {
   const res = await fetch(`${BASE}/api/page/${slug}/restore`, { method: 'POST' });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.detail ?? 'Restore failed');
-  return data;
+  return parseResponse<{ ok: boolean }>(res, 'Restore failed');
 }
 
 export async function fetchArchivedPages(): Promise<ArchivedPage[]> {
@@ -185,9 +190,7 @@ export async function postIngest(payload: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.detail ?? 'Ingest failed');
-  return data;
+  return parseResponse<IngestResult>(res, 'Ingest failed');
 }
 
 // ── POST /api/upload (multipart) ─────────────────────────────────────────────
@@ -204,9 +207,7 @@ export async function postUpload(
   fd.append('domain', domain);
   fd.append('tags', tags.join(','));
   const res = await fetch(`${BASE}/api/upload`, { method: 'POST', body: fd });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.detail ?? 'Upload failed');
-  return data;
+  return parseResponse<IngestResult>(res, 'Upload failed');
 }
 
 export async function postIngestText(
@@ -221,9 +222,7 @@ export async function postIngestText(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text, title, source_type: sourceType, domain, tags }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.detail ?? 'Ingest failed');
-  return data;
+  return parseResponse<IngestResult>(res, 'Ingest failed');
 }
 
 // ── POST /api/query — SSE async generator ────────────────────────────────────

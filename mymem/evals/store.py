@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -35,7 +36,8 @@ CREATE TABLE IF NOT EXISTS extraction_consensus (
     thesis_captured  INTEGER NOT NULL,
     grade            TEXT    NOT NULL,
     gaps_json        TEXT    NOT NULL,
-    false_pos_json   TEXT    NOT NULL
+    false_pos_json   TEXT    NOT NULL,
+    full_result_json TEXT    NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_ec_score ON extraction_consensus(consensus_score);
 """
@@ -55,6 +57,15 @@ def _ensure_consensus(db_path: Path) -> None:
         for stmt in _CREATE_CONSENSUS.strip().split(";"):
             if stmt.strip():
                 conn.execute(stmt)
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(extraction_consensus)").fetchall()
+        }
+        if "full_result_json" not in columns:
+            conn.execute(
+                "ALTER TABLE extraction_consensus "
+                "ADD COLUMN full_result_json TEXT NOT NULL DEFAULT '{}'"
+            )
 
 
 def save_run(
@@ -113,8 +124,9 @@ def save_extraction_consensus(db_path: Path, result: "ExtractionConsensusResult"
         conn.execute(
             """INSERT INTO extraction_consensus
                (run_at, source_id, source_type, pipeline_model, reference_model,
-                consensus_score, thesis_captured, grade, gaps_json, false_pos_json)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                consensus_score, thesis_captured, grade, gaps_json, false_pos_json,
+                full_result_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 datetime.now(UTC).isoformat(timespec="seconds"),
                 result.source_id,
@@ -126,6 +138,7 @@ def save_extraction_consensus(db_path: Path, result: "ExtractionConsensusResult"
                 result.grade,
                 json.dumps(list(result.gaps)),
                 json.dumps(list(result.false_positives)),
+                json.dumps(asdict(result), default=str),
             ),
         )
 
@@ -158,6 +171,10 @@ def recent_consensus_runs(
             d = dict(r)
             d["gaps"] = json.loads(d.pop("gaps_json", "[]"))
             d["false_positives"] = json.loads(d.pop("false_pos_json", "[]"))
+            try:
+                d["full_result"] = json.loads(d.pop("full_result_json", "{}"))
+            except (TypeError, json.JSONDecodeError):
+                d["full_result"] = {}
             d["thesis_captured"] = bool(d["thesis_captured"])
             result.append(d)
         return result

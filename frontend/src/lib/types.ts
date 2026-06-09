@@ -257,6 +257,7 @@ export interface ExtractionConsensusRun {
   grade:            EvalGrade;
   gaps:             string[];
   false_positives:  string[];
+  full_result?:     Record<string, unknown>;
 }
 
 export interface EvalsExtractionResult {

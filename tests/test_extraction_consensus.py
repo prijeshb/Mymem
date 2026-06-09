@@ -314,6 +314,8 @@ class TestExtractionConsensusStore:
         assert len(runs) == 1
         assert runs[0]["source_id"] == "test-article.md"
         assert runs[0]["grade"] in ("PASS", "WARN", "FAIL")
+        assert runs[0]["full_result"]["source_id"] == "test-article.md"
+        assert len(runs[0]["full_result"]["pipeline_ideas"]) == len(PIPELINE_IDEAS)
 
     def test_worst_first_ordering(self, tmp_path):
         from mymem.evals.store import save_extraction_consensus, recent_consensus_runs
@@ -331,3 +333,37 @@ class TestExtractionConsensusStore:
         from mymem.evals.store import recent_consensus_runs
         runs = recent_consensus_runs(tmp_path / "nonexistent.db")
         assert runs == []
+
+    def test_existing_schema_gets_full_result_column(self, tmp_path):
+        import sqlite3
+        from mymem.evals.store import recent_consensus_runs
+
+        db = tmp_path / "old.db"
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                """CREATE TABLE extraction_consensus (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_at TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    pipeline_model TEXT NOT NULL,
+                    reference_model TEXT NOT NULL,
+                    consensus_score REAL NOT NULL,
+                    thesis_captured INTEGER NOT NULL,
+                    grade TEXT NOT NULL,
+                    gaps_json TEXT NOT NULL,
+                    false_pos_json TEXT NOT NULL
+                )"""
+            )
+            conn.execute(
+                """INSERT INTO extraction_consensus
+                   (run_at, source_id, source_type, pipeline_model, reference_model,
+                    consensus_score, thesis_captured, grade, gaps_json, false_pos_json)
+                   VALUES ('2026-06-09T00:00:00+00:00', 'old', 'article', 'p', 'r',
+                           0.0, 0, 'FAIL', '[]', '[]')"""
+            )
+
+        runs = recent_consensus_runs(db)
+
+        assert runs[0]["source_id"] == "old"
+        assert runs[0]["full_result"] == {}

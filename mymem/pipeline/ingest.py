@@ -15,6 +15,7 @@ Flow:
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 import textwrap
 from dataclasses import dataclass, field
 from datetime import date
@@ -531,6 +532,13 @@ async def ingest_source(
         )
 
     log.info("Ideas extracted", source=source_name, total=len(all_ideas))
+    selected_ideas = _rank_extracted_ideas(all_ideas, max_concepts=max_concepts)
+    log.info(
+        "Ideas selected",
+        source=source_name,
+        selected=len(selected_ideas),
+        raw=len(all_ideas),
+    )
 
     # 4. Compile each idea into a wiki page
     index_mgr  = IndexManager(index_path)
@@ -539,7 +547,7 @@ async def ingest_source(
     inferred_domain = domain_from_str(domain) if domain else TagDomain.MISC
     extra_tags = normalize_tags(tags or [])
 
-    for idx, idea in enumerate(all_ideas[:max_concepts], 1):
+    for idx, idea in enumerate(selected_ideas, 1):
         idea_title   = str(idea.get("title", "Untitled"))
         idea_summary = str(idea.get("summary", ""))
         idea_tags    = normalize_tags(
@@ -641,7 +649,7 @@ async def ingest_source(
                 source_name=source_name,
                 source_type=source_type,
                 source_text=source_text,
-                pipeline_ideas=all_ideas,
+                pipeline_ideas=selected_ideas,
                 router=router,
                 db_path=db_path,
             )
@@ -795,6 +803,86 @@ def _parse_ideas(raw: str) -> list[dict[str, object]]:
     except (json.JSONDecodeError, ValueError):
         log.debug("_parse_ideas: JSON parse failed", raw_preview=raw[:200])
     return []
+
+
+def _idea_text(idea: dict[str, object]) -> str:
+    return f"{idea.get('title', '')} {idea.get('summary', '')}".strip()
+
+
+def _rank_extracted_ideas(
+    ideas: list[dict[str, object]],
+    *,
+    max_concepts: int,
+    duplicate_threshold: float = 0.55,
+) -> list[dict[str, object]]:
+    """
+    Deduplicate and rank chunk-extracted ideas.
+
+    Repeated ideas across chunks are evidence of document-wide coverage, so they
+    rise above one-off ideas while single-chunk documents keep their original order.
+    """
+    if max_concepts <= 0:
+        return []
+    if not ideas:
+        return []
+
+    from mymem.evals.metrics import rouge1_f1
+
+    groups: list[dict[str, object]] = []
+    for index, idea in enumerate(ideas):
+        text = _idea_text(idea)
+        matched_group: dict[str, object] | None = None
+        for group in groups:
+            if rouge1_f1(text, str(group["text"])) >= duplicate_threshold:
+                matched_group = group
+                break
+
+        if matched_group is None:
+            groups.append({
+                "first_index": index,
+                "count": 1,
+                "text": text,
+                "ideas": [dict(idea)],
+            })
+            continue
+
+        matched_group["count"] = int(matched_group["count"]) + 1
+        group_ideas = matched_group["ideas"]
+        if isinstance(group_ideas, list):
+            group_ideas.append(dict(idea))
+
+    selected: list[dict[str, object]] = []
+    ranked = sorted(
+        groups,
+        key=lambda group: (-int(group["count"]), int(group["first_index"])),
+    )
+    for group in ranked[:max_concepts]:
+        group_ideas = group["ideas"]
+        if not isinstance(group_ideas, list):
+            continue
+
+        representative = max(
+            group_ideas,
+            key=lambda item: len(str(item.get("summary", ""))),
+        )
+        merged = dict(representative)
+        tags: list[str] = []
+        domains: list[str] = []
+        for item in group_ideas:
+            for tag in item.get("tags") or []:
+                tag_text = str(tag)
+                if tag_text and tag_text not in tags:
+                    tags.append(tag_text)
+            domain = str(item.get("domain", ""))
+            if domain:
+                domains.append(domain)
+        if tags:
+            merged["tags"] = tags
+        if domains:
+            merged["domain"] = Counter(domains).most_common(1)[0][0]
+        selected.append(merged)
+
+    return selected
 
 
 def _strip_frontmatter(text: str) -> str:

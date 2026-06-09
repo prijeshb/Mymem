@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -372,21 +374,27 @@ async def api_upload(
             dest_path = dest_dir / f"{stem}_{counter}{suffix}"
             counter += 1
 
-    with dest_path.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
+    try:
+        with dest_path.open("wb") as f:
+            shutil.copyfileobj(file.file, f)
 
-    result = await ingest_source(
-        str(dest_path),
-        wiki_dir=wiki_dir,
-        index_path=index_path,
-        log_path=log_path,
-        router=llm_router,
-        source_type=source_type,
-        tags=tag_list,
-        domain=domain,
-        max_concepts=settings.pipeline.max_concepts,
-        db_path=request.app.state.db_path,
-    )
+        result = await ingest_source(
+            str(dest_path),
+            wiki_dir=wiki_dir,
+            index_path=index_path,
+            log_path=log_path,
+            router=llm_router,
+            source_type=source_type,
+            tags=tag_list,
+            domain=domain,
+            max_concepts=settings.pipeline.max_concepts,
+            db_path=request.app.state.db_path,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("upload failed", error=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc))
 
     return JSONResponse({
         "skipped":       result.skipped,
@@ -414,14 +422,15 @@ async def api_ingest_text(req: IngestTextRequest, request: Request) -> JSONRespo
     if not req.text.strip():
         raise HTTPException(status_code=400, detail="text must not be empty")
 
-    suffix = ".txt"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, mode="w", encoding="utf-8") as tmp:
-        if req.title:
-            tmp.write(f"# {req.title}\n\n")
-        tmp.write(req.text)
-        tmp_path = tmp.name
-
+    # mkstemp avoids the Windows NamedTemporaryFile locking issue — the fd is
+    # closed before ingest_source opens the file, so no FILE_SHARE conflict.
+    fd, tmp_path = tempfile.mkstemp(suffix=".txt")
     try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            if req.title:
+                tmp.write(f"# {req.title}\n\n")
+            tmp.write(req.text)
+
         result = await ingest_source(
             tmp_path,
             wiki_dir=wiki_dir,
@@ -434,9 +443,11 @@ async def api_ingest_text(req: IngestTextRequest, request: Request) -> JSONRespo
             max_concepts=request.app.state.settings.pipeline.max_concepts,
             db_path=request.app.state.db_path,
         )
+    except HTTPException:
+        raise
     except Exception as exc:
-        log.exception("upload ingest failed", error=str(exc))
-        raise HTTPException(status_code=500, detail="Upload processing failed. Check server logs for details.")
+        log.exception("ingest-text failed", error=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc))
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 

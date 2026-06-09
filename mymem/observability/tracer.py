@@ -74,7 +74,7 @@ class TraceRecord:
     output_tokens: int = 0
     cost_usd: float = 0.0
     error: str | None = None
-    _start: float = field(default_factory=time.monotonic, repr=False)
+    _start: float = field(default_factory=time.perf_counter, repr=False)
 
     def record(self, input_tokens: int = 0, output_tokens: int = 0) -> None:
         self.input_tokens = input_tokens
@@ -82,7 +82,7 @@ class TraceRecord:
         self.cost_usd = estimate_cost(self.model, input_tokens, output_tokens)
 
     def finish(self, error: str | None = None) -> None:
-        self.latency_ms = (time.monotonic() - self._start) * 1000
+        self.latency_ms = max((time.perf_counter() - self._start) * 1000, 0.001)
         self.error = error
 
 
