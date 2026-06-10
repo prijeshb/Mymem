@@ -38,7 +38,8 @@ class EvalConfig:
     run_wiki: bool = True
     run_retrieval: bool = True
     run_llm_judge: bool = False
-    router: object = None           # ModelRouter — required only for llm-judge
+    run_extraction_consensus: bool = False  # requires router
+    router: object = None           # ModelRouter — required only for llm-judge + consensus
     ragas_n: int = 5                # pages to sample for RAGAS-lite
     # Sample text for chunk ablation (if None, uses longest wiki page body)
     chunk_sample_text: str | None = None
@@ -51,6 +52,7 @@ class EvalReport:
     retrieval: RetrievalReport | None = None
     confidence_summary: dict = field(default_factory=dict)
     ragas_results: list = field(default_factory=list)
+    extraction_consensus_summary: dict = field(default_factory=dict)
     skipped: list[str] = field(default_factory=list)
 
     def summary(self) -> dict:
@@ -88,6 +90,8 @@ class EvalReport:
                 "mean_overall": round(sum(scores) / len(scores), 3) if scores else 0.0,
                 "skipped": sum(1 for r in self.ragas_results if r.skipped),
             }
+        if self.extraction_consensus_summary:
+            out["extraction_consensus"] = self.extraction_consensus_summary
         if self.skipped:
             out["skipped"] = self.skipped
         return out
@@ -232,6 +236,36 @@ async def run_evals(cfg: EvalConfig) -> EvalReport:
         except Exception as exc:
             log.warning("retrieval eval failed", error=str(exc), exc_info=True)
             report.skipped.append("retrieval: eval failed (check logs)")
+
+    # --- Extraction consensus summary (from stored runs) ---
+    if cfg.run_extraction_consensus:
+        log.info("Loading extraction consensus summary")
+        try:
+            from mymem.evals.store import recent_consensus_runs
+            runs = recent_consensus_runs(evals_db, limit=100)
+            if runs:
+                grades = [r["grade"] for r in runs]
+                pass_rate = round(grades.count("PASS") / len(grades), 3)
+                warn_rate = round(grades.count("WARN") / len(grades), 3)
+                fail_rate = round(grades.count("FAIL") / len(grades), 3)
+                scores = [r["consensus_score"] for r in runs]
+                ev_rates = [r.get("evidence_support_rate", 0.0) for r in runs]
+                dup_rates = [r.get("duplicate_rate", 0.0) for r in runs]
+                report.extraction_consensus_summary = {
+                    "n_runs": len(runs),
+                    "pass_rate": pass_rate,
+                    "warn_rate": warn_rate,
+                    "fail_rate": fail_rate,
+                    "mean_consensus_score": round(sum(scores) / len(scores), 3),
+                    "mean_evidence_support_rate": round(sum(ev_rates) / len(ev_rates), 3),
+                    "mean_duplicate_rate": round(sum(dup_rates) / len(dup_rates), 3),
+                }
+                save_run(evals_db, "extraction_consensus", report.extraction_consensus_summary)
+            else:
+                report.skipped.append("extraction_consensus: no stored runs yet")
+        except Exception as exc:
+            log.warning("extraction consensus summary failed", error=str(exc), exc_info=True)
+            report.skipped.append("extraction_consensus: summary failed (check logs)")
 
     # --- LLM judge (RAGAS-lite) ---
     if cfg.run_llm_judge:

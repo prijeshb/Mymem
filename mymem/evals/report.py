@@ -122,6 +122,30 @@ def print_report(report: EvalReport) -> None:
                 mt.add_row(m.query[:50], m.expected_slug, m.top_k_slugs[0] if m.top_k_slugs else "—")
             console.print(mt)
 
+    # --- Extraction Consensus ---
+    if report.extraction_consensus_summary:
+        ec = report.extraction_consensus_summary
+        t = Table(title="Extraction Consensus (stored runs)", box=box.SIMPLE_HEAVY)
+        t.add_column("Metric", style="dim")
+        t.add_column("Value", justify="right")
+        t.add_column("Status", justify="center")
+        t.add_row("Total runs", str(ec.get("n_runs", 0)), "")
+        pass_rate = ec.get("pass_rate", 0.0)
+        t.add_row("PASS rate", f"{pass_rate:.0%}",
+                  _g("PASS") if pass_rate >= 0.70 else _g("WARN") if pass_rate >= 0.40 else _g("FAIL"))
+        t.add_row("WARN rate", f"{ec.get('warn_rate', 0.0):.0%}", "")
+        t.add_row("FAIL rate", f"{ec.get('fail_rate', 0.0):.0%}", "")
+        mean_score = ec.get("mean_consensus_score", 0.0)
+        t.add_row("Mean consensus score", f"{mean_score:.3f}",
+                  _g("PASS") if mean_score >= 0.67 else _g("WARN") if mean_score >= 0.50 else _g("FAIL"))
+        ev_rate = ec.get("mean_evidence_support_rate", 0.0)
+        t.add_row("Mean evidence support", f"{ev_rate:.0%}",
+                  _g("PASS") if ev_rate >= 0.80 else _g("WARN") if ev_rate >= 0.50 else _g("FAIL"))
+        dup_rate = ec.get("mean_duplicate_rate", 0.0)
+        t.add_row("Mean duplicate rate", f"{dup_rate:.0%}",
+                  _g("PASS") if dup_rate < 0.10 else _g("WARN") if dup_rate < 0.25 else _g("FAIL"))
+        console.print(t)
+
     # --- Skipped ---
     if report.skipped:
         console.print(Panel(

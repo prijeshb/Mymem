@@ -83,15 +83,25 @@ function TokenBadge({ tokens }: { tokens: number }) {
   );
 }
 
+const MAX_CONCEPTS_OPTIONS: { label: string; value: number }[] = [
+  { label: '3 — focused',   value: 3  },
+  { label: '5 — balanced',  value: 5  },
+  { label: '8',             value: 8  },
+  { label: '12',            value: 12 },
+  { label: '20 — thorough', value: 20 },
+];
+
 function SharedFields({
   sourceType, setSourceType,
   domain, setDomain,
   tags, setTags,
+  maxConcepts, setMaxConcepts,
   autoDetected, onManualTypeChange,
 }: {
   sourceType: SourceType; setSourceType: (v: SourceType) => void;
   domain: string; setDomain: (v: string) => void;
   tags: string; setTags: (v: string) => void;
+  maxConcepts: number; setMaxConcepts: (v: number) => void;
   autoDetected?: boolean;
   onManualTypeChange?: (v: SourceType) => void;
 }) {
@@ -136,6 +146,22 @@ function SharedFields({
         >
           <option value="">Auto-detect</option>
           {ALL_DOMAINS.map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
+      </div>
+      <div>
+        <label htmlFor="max-concepts" className="block text-xs font-medium text-gray-300 mb-1">
+          Ideas to extract
+        </label>
+        <select
+          id="max-concepts"
+          value={maxConcepts}
+          onChange={e => setMaxConcepts(Number(e.target.value))}
+          className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-gray-100
+                     focus:outline-hidden focus:ring-2 focus:ring-indigo-400 [color-scheme:dark]"
+        >
+          {MAX_CONCEPTS_OPTIONS.map(o => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
         </select>
       </div>
       <div>
@@ -192,6 +218,7 @@ export function IngestPage() {
   const [autoDetected, setAutoDetected] = useState(false);
   const [domain, setDomain]         = useState('');
   const [tags, setTags]             = useState('');
+  const [maxConcepts, setMaxConcepts] = useState(5);
 
   const [url, setUrl]               = useState('');
   const [file, setFile]             = useState<File | null>(null);
@@ -211,7 +238,7 @@ export function IngestPage() {
     e.preventDefault();
     setLoading(true); setResult(null); setError(null);
     try {
-      const r = await postIngest({ source: url, source_type: sourceType, domain, tags: tagList() });
+      const r = await postIngest({ source: url, source_type: sourceType, domain, tags: tagList(), max_concepts: maxConcepts });
       setResult(r);
     } catch (err) {
       setError(String(err));
@@ -225,7 +252,7 @@ export function IngestPage() {
     if (!text.trim()) return;
     setLoading(true); setResult(null); setError(null);
     try {
-      const r = await postIngestText(text, textTitle, sourceType, domain, tagList());
+      const r = await postIngestText(text, textTitle, sourceType, domain, tagList(), maxConcepts);
       setResult(r);
     } catch (err) {
       setError(String(err));
@@ -239,7 +266,7 @@ export function IngestPage() {
     if (!file) return;
     setLoading(true); setResult(null); setError(null);
     try {
-      const r = await postUpload(file, sourceType, domain, tagList());
+      const r = await postUpload(file, sourceType, domain, tagList(), maxConcepts);
       setResult(r);
     } catch (err) {
       setError(String(err));
@@ -276,6 +303,7 @@ export function IngestPage() {
                 sourceType={sourceType} setSourceType={setSourceType}
                 domain={domain} setDomain={setDomain}
                 tags={tags} setTags={setTags}
+                maxConcepts={maxConcepts} setMaxConcepts={setMaxConcepts}
                 autoDetected={autoDetected}
                 onManualTypeChange={() => setAutoDetected(false)}
               />
@@ -319,6 +347,7 @@ export function IngestPage() {
                 sourceType={sourceType} setSourceType={setSourceType}
                 domain={domain} setDomain={setDomain}
                 tags={tags} setTags={setTags}
+                maxConcepts={maxConcepts} setMaxConcepts={setMaxConcepts}
               />
               <form onSubmit={submitFile} className="space-y-4 mt-4">
                 <div>
@@ -364,6 +393,7 @@ export function IngestPage() {
                 sourceType={sourceType} setSourceType={setSourceType}
                 domain={domain} setDomain={setDomain}
                 tags={tags} setTags={setTags}
+                maxConcepts={maxConcepts} setMaxConcepts={setMaxConcepts}
               />
               <form onSubmit={submitText} className="space-y-4 mt-4">
                 <div>

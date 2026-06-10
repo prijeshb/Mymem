@@ -93,22 +93,24 @@ class QueryRequest(BaseModel):
 
 
 class IngestRequest(BaseModel):
-    source:      str
+    source:       str
     # article | paper | repo | dataset | image | youtube | podcast | tweet
     # webpage | book | newsletter | note
-    source_type: str = "article"
-    tags:        list[str] = []
-    domain:      str = ""
+    source_type:  str = "article"
+    tags:         list[str] = []
+    domain:       str = ""
+    max_concepts: int | None = None   # None → use server default from config
 
 
 class IngestTextRequest(BaseModel):
-    text:        str
+    text:         str
     # article | paper | repo | dataset | image | youtube | podcast | tweet
     # webpage | book | newsletter | note
-    source_type: str = "article"
-    tags:        list[str] = []
-    domain:      str = ""
-    title:       str = ""    # optional hint for the wiki page title
+    source_type:  str = "article"
+    tags:         list[str] = []
+    domain:       str = ""
+    title:        str = ""    # optional hint for the wiki page title
+    max_concepts: int | None = None   # None → use server default from config
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +313,7 @@ async def api_ingest(req: IngestRequest, request: Request) -> JSONResponse:
             source_type=req.source_type,
             tags=req.tags,
             domain=req.domain,
-            max_concepts=request.app.state.settings.pipeline.max_concepts,
+            max_concepts=req.max_concepts if req.max_concepts is not None else request.app.state.settings.pipeline.max_concepts,
             db_path=request.app.state.db_path,
         )
         return JSONResponse({
@@ -344,10 +346,11 @@ _SOURCE_TYPE_SUBDIR: dict[str, str] = {
 @router.post("/upload")
 async def api_upload(
     request: Request,
-    file:        UploadFile = File(...),
-    source_type: str        = Form("article"),
-    domain:      str        = Form(""),
-    tags:        str        = Form(""),      # comma-separated
+    file:         UploadFile  = File(...),
+    source_type:  str         = Form("article"),
+    domain:       str         = Form(""),
+    tags:         str         = Form(""),      # comma-separated
+    max_concepts: int | None  = Form(None),
 ) -> JSONResponse:
     wiki_dir   = request.app.state.wiki_dir
     index_path = request.app.state.index_path
@@ -387,14 +390,14 @@ async def api_upload(
             source_type=source_type,
             tags=tag_list,
             domain=domain,
-            max_concepts=settings.pipeline.max_concepts,
+            max_concepts=max_concepts if max_concepts is not None else settings.pipeline.max_concepts,
             db_path=request.app.state.db_path,
         )
     except HTTPException:
         raise
     except Exception as exc:
         log.exception("upload failed", error=str(exc))
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="Upload failed. Check server logs for details.")
 
     return JSONResponse({
         "skipped":       result.skipped,
@@ -440,14 +443,14 @@ async def api_ingest_text(req: IngestTextRequest, request: Request) -> JSONRespo
             source_type=req.source_type,
             tags=req.tags,
             domain=req.domain,
-            max_concepts=request.app.state.settings.pipeline.max_concepts,
+            max_concepts=req.max_concepts if req.max_concepts is not None else request.app.state.settings.pipeline.max_concepts,
             db_path=request.app.state.db_path,
         )
     except HTTPException:
         raise
     except Exception as exc:
         log.exception("ingest-text failed", error=str(exc))
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail="Ingest failed. Check server logs for details.")
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 

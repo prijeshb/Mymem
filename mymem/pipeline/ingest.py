@@ -22,7 +22,25 @@ from datetime import date
 from pathlib import Path
 from typing import Callable, Awaitable
 
+from pydantic import BaseModel, Field as PydanticField, ValidationError
+
 from mymem.observability.logger import get_logger, set_run_id
+from mymem.pipeline.readers import (
+    read_source as _read_source,
+    _is_youtube_url,
+    _html_to_text,
+    _extract_video_id,
+    _read_youtube,
+    _format_duration,
+    _format_chapters,
+    _build_youtube_context,
+    _fetch_youtube_metadata,
+    _YT_AVAILABLE,
+    YouTubeTranscriptApi,
+    TranscriptsDisabled,
+    NoTranscriptFound,
+    trafilatura,
+)
 from mymem.pipeline.router import ModelRouter
 from mymem.pipeline.splitter import ChunkSplitter, merge_prompt, merge_system_prompt
 
@@ -36,25 +54,6 @@ from mymem.wiki.tags import domain_from_str, normalize_tags
 from mymem.wiki.types import IndexEntry, LogEntry, LogOperation, TagDomain, WikiPage
 
 log = get_logger(__name__)
-
-try:
-    import trafilatura as trafilatura  # type: ignore[import-untyped]
-except ImportError:
-    trafilatura = None  # type: ignore[assignment]
-
-try:
-    from youtube_transcript_api import YouTubeTranscriptApi as YouTubeTranscriptApi  # type: ignore[import-untyped]
-    from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound  # type: ignore[import-untyped]
-    _YT_AVAILABLE = True
-except ImportError:
-    YouTubeTranscriptApi = None  # type: ignore[assignment,misc]
-    _YT_AVAILABLE = False
-
-    class TranscriptsDisabled(Exception):  # type: ignore[no-redef]
-        """Sentinel — real class lives in youtube_transcript_api."""
-
-    class NoTranscriptFound(Exception):  # type: ignore[no-redef]
-        """Sentinel — real class lives in youtube_transcript_api."""
 
 
 # ---------------------------------------------------------------------------
@@ -74,279 +73,69 @@ class IngestResult:
 
 
 # ---------------------------------------------------------------------------
-# Source reading
+# Idea schema
 # ---------------------------------------------------------------------------
 
-async def _read_source(source: str, source_type: str = "article") -> str:
-    """Read text from a local file path or HTTP(S) URL.
-
-    Dispatches based on source_type:
-      youtube    → fetch transcript via youtube-transcript-api
-      webpage    → HTTP fetch + HTML → plain-text stripping
-      podcast    → HTTP fetch + HTML strip (RSS/show-notes page)
-      tweet      → HTTP fetch + HTML strip
-      pdf / book → pypdf text extraction (file path only)
-      *          → plain file read
-    """
-    # --- YouTube ----------------------------------------------------------
-    if source_type == "youtube" or _is_youtube_url(source):
-        return await _read_youtube(source)
-
-    # --- Generic URL (webpage / podcast / tweet / article) ----------------
-    if source.startswith(("http://", "https://")):
-        # trafilatura.fetch_url handles fetch + decompression + encoding
-        # detection + extraction in one call — no need to manage httpx,
-        # brotli, charset guessing, or BeautifulSoup ourselves.
-        if trafilatura is not None:
-            text = trafilatura.fetch_url(source)
-            if text and len(text.strip()) > 100:
-                log.info("trafilatura fetched URL", chars=len(text), url=source)
-                return text.strip()
-            log.warning("trafilatura returned no content for URL", url=source)
-        else:
-            log.warning("trafilatura not installed — falling back to httpx. "
-                        "Run: pip install trafilatura")
-
-        # httpx fallback (plain-text / JSON responses, or no trafilatura)
-        try:
-            import httpx
-        except ImportError as e:
-            raise RuntimeError("httpx or trafilatura required for URL ingestion") from e
-        async with httpx.AsyncClient(
-            timeout=30,
-            follow_redirects=True,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-            },
-        ) as client:
-            resp = await client.get(source)
-            if resp.status_code == 403:
-                raise RuntimeError(
-                    f"Access denied (403) for {source}. "
-                    "Try pasting the article text directly via 'Paste text'."
-                )
-            resp.raise_for_status()
-        content_type = resp.headers.get("content-type", "")
-        if content_type.startswith("text/html"):
-            return _html_to_text(resp.content)
-        return resp.content.decode("utf-8", errors="replace")
-
-    # --- Local file -------------------------------------------------------
-    path = Path(source)
-    if path.suffix.lower() == ".pdf" or source_type == "book":
-        try:
-            from pypdf import PdfReader
-        except ImportError as e:
-            raise RuntimeError("pypdf required for PDF/book ingestion") from e
-        reader = PdfReader(str(path))
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
-    return path.read_text(encoding="utf-8", errors="replace")
-
-
-# ---------------------------------------------------------------------------
-# Source-type helpers
-# ---------------------------------------------------------------------------
-
-def _is_youtube_url(url: str) -> bool:
-    """Return True if *url* looks like a YouTube video link."""
-    return (
-        "youtube.com/watch" in url
-        or "youtu.be/" in url
-        or "youtube.com/embed/" in url
-        or "youtube.com/shorts/" in url
-    )
-
-
-def _extract_video_id(url: str) -> str | None:
-    """Extract the 11-char video ID from any YouTube URL form."""
-    import re
-    patterns = [
-        r"youtube\.com/watch\?.*v=([A-Za-z0-9_-]{11})",
-        r"youtu\.be/([A-Za-z0-9_-]{11})",
-        r"youtube\.com/embed/([A-Za-z0-9_-]{11})",
-        r"youtube\.com/shorts/([A-Za-z0-9_-]{11})",
-    ]
-    for pat in patterns:
-        m = re.search(pat, url)
-        if m:
-            return m.group(1)
-    return None
-
-
-async def _fetch_youtube_metadata(url: str) -> dict:
-    """Fetch video metadata (title, description, chapters, …) via yt-dlp.
-
-    Returns an empty dict if yt-dlp is not installed or the fetch fails.
-    Runs the blocking yt-dlp call in a thread executor so the event loop
-    stays responsive while waiting.
-    """
-    try:
-        import yt_dlp  # type: ignore[import-untyped]
-    except ImportError:
-        return {}
-
-    def _extract() -> dict:
-        opts = {"quiet": True, "no_warnings": True, "skip_download": True}
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            return info or {}
-
-    try:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _extract)
-    except Exception as exc:
-        log.warning("yt-dlp metadata fetch failed", url=url, error=str(exc))
-        return {}
-
-
-def _format_duration(seconds: int | float) -> str:
-    """Convert seconds to H:MM:SS or M:SS string."""
-    s = int(seconds)
-    h, rem = divmod(s, 3600)
-    m, sec = divmod(rem, 60)
-    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
-
-
-def _format_chapters(chapters: list[dict]) -> str:
-    """Format chapter list as 'MM:SS  Title' lines."""
-    return "\n".join(
-        f"{_format_duration(ch.get('start_time', 0))}  {ch.get('title', '')}"
-        for ch in chapters
-    )
-
-
-def _build_youtube_context(info: dict, video_id: str, transcript: str) -> str:
-    """Combine yt-dlp metadata with transcript into a rich context string for the LLM."""
-    parts: list[str] = []
-
-    title        = info.get("title", "")
-    channel      = info.get("uploader") or info.get("channel", "")
-    upload_date  = info.get("upload_date", "")      # "YYYYMMDD"
-    duration     = info.get("duration")
-    description  = (info.get("description") or "").strip()
-    chapters     = info.get("chapters") or []
-
-    # Header block
-    header = f"[YouTube Video — ID: {video_id}]"
-    if title:
-        header += f"\nTitle: {title}"
-    meta: list[str] = []
-    if channel:
-        meta.append(f"Channel: {channel}")
-    if upload_date and len(upload_date) == 8:
-        meta.append(f"Published: {upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}")
-    if duration is not None:
-        meta.append(f"Duration: {_format_duration(duration)}")
-    if meta:
-        header += "\n" + "  |  ".join(meta)
-    parts.append(header)
-
-    if description:
-        preview = description[:1500] + ("..." if len(description) > 1500 else "")
-        parts.append(f"Description:\n{preview}")
-
-    if chapters:
-        parts.append(f"Chapters:\n{_format_chapters(chapters)}")
-
-    parts.append(f"Transcript:\n{transcript}")
-    return "\n\n".join(parts)
-
-
-async def _read_youtube(url: str) -> str:
-    """Fetch YouTube transcript enriched with video metadata when yt-dlp is available.
-
-    Metadata (title, description, chapters, channel, date) is fetched via yt-dlp
-    concurrently with the transcript to keep total latency low.
-    Falls back to transcript-only output if yt-dlp is not installed.
-    """
-    if not _YT_AVAILABLE:
-        raise RuntimeError(
-            "youtube-transcript-api is required for YouTube ingestion.\n"
-            "Install it with:  pip install youtube-transcript-api"
-        )
-
-    video_id = _extract_video_id(url)
-    if not video_id:
-        raise ValueError(f"Cannot extract YouTube video ID from URL: {url!r}")
-
-    log.info("Fetching YouTube video", video_id=video_id)
-
-    # Kick off metadata fetch in background while transcript fetch runs
-    metadata_task = asyncio.ensure_future(_fetch_youtube_metadata(url))
-
-    api = YouTubeTranscriptApi()
-    try:
-        fetched = api.fetch(video_id, languages=["en", "en-US", "en-GB"])
-    except TranscriptsDisabled:
-        metadata_task.cancel()
-        raise RuntimeError(f"Transcripts are disabled for YouTube video: {video_id}")
-    except NoTranscriptFound:
-        try:
-            transcript_list = api.list(video_id)
-            transcript = next(iter(transcript_list))
-            fetched = transcript.fetch()
-        except StopIteration:
-            metadata_task.cancel()
-            raise RuntimeError(f"No transcripts available for video: {video_id}")
-
-    transcript_text = " ".join(s.text for s in fetched if s.text.strip())
-    log.info("YouTube transcript fetched", video_id=video_id, chars=len(transcript_text))
-
-    info = await metadata_task
-    if info:
-        log.info("YouTube metadata fetched", video_id=video_id, title=info.get("title", ""))
-        return _build_youtube_context(info, video_id, transcript_text)
-
-    # Fallback: transcript only (yt-dlp not installed or fetch failed)
-    return f"[YouTube transcript — video ID: {video_id}]\n\n{transcript_text}"
-
-
-def _html_to_text(html: bytes | str) -> str:
-    """Extract readable article text from HTML via trafilatura or BeautifulSoup."""
-    if trafilatura is not None:
-        try:
-            text = trafilatura.extract(
-                html,
-                include_comments=False,
-                include_tables=True,
-                no_fallback=False,
-                output_format="txt",
-            )
-        except TypeError:
-            text = trafilatura.extract(
-                html,
-                include_comments=False,
-                include_tables=True,
-                no_fallback=False,
-            )
-        if text and text.strip():
-            log.info("trafilatura extracted text", chars=len(text))
-            return text.strip()
-    else:
-        log.warning("trafilatura not installed — falling back to BeautifulSoup. "
-                    "Run: pip install trafilatura")
-
-    html_str: str = html.decode("utf-8", errors="replace") if isinstance(html, bytes) else html
-
-    try:
-        from bs4 import BeautifulSoup
-    except ImportError:
-        import re
-        return re.sub(r"<[^>]+>", " ", html_str)
-
-    soup = BeautifulSoup(html_str, "html.parser")
-    for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
-        tag.decompose()
-    return soup.get_text(separator="\n", strip=True)
+class IdeaSchema(BaseModel):
+    """Canonical shape for every extracted idea — pipeline and reference extractor."""
+    title: str
+    summary: str
+    why_it_matters: str = ""
+    evidence: list[str] = PydanticField(default_factory=list)
+    chunk_id: int = 0
+    importance: int = PydanticField(default=3, ge=1, le=5)
+    main_thesis: bool = False
+    tags: list[str] = PydanticField(default_factory=list)
+    domain: str = "misc"
 
 
 # ---------------------------------------------------------------------------
 # LLM prompts
 # ---------------------------------------------------------------------------
+
+# New canonical extraction system prompt — no max_concepts ceiling.
+_EXTRACT_SYSTEM = """\
+You are a knowledge curator. Extract the globally important ideas from this source chunk.
+
+Return only valid JSON array:
+[
+  {
+    "title": "3-8 word searchable concept title",
+    "summary": "2-3 sentence explanation grounded only in the source",
+    "why_it_matters": "Why this is worth preserving in a personal wiki",
+    "evidence": ["short source-grounded quote or paraphrase"],
+    "chunk_id": 0,
+    "importance": 3,
+    "main_thesis": false,
+    "tags": ["lowercase"],
+    "domain": "tech|research|business|personal|creative|finance|health|spiritual|reminder|misc"
+  }
+]
+
+Rules:
+- Do not infer facts not present in the source.
+- Prefer distinct concepts over overlapping variants.
+- Include both central thesis and non-obvious supporting ideas.
+- Do not include generic background knowledge unless the source uses it as a key idea.
+"""
+
+_MERGE_SYSTEM = """\
+You are a knowledge curator merging extracted concepts from multiple document chunks.
+
+You will receive a JSON array of candidate ideas, each with a recurrence_count showing
+how many chunks mentioned this concept. Deduplicate by concept identity (not wording),
+preserve the evidence from the best-scored duplicate, and return a clean final list.
+
+Return only a valid JSON array using the same schema as the input.
+"""
+
+_VERIFY_SYSTEM = """\
+You are reviewing an extraction for completeness.
+
+You will receive the source text and the ideas already extracted from it.
+List any important source ideas that are MISSING from the extraction.
+Use the same JSON schema. If nothing is missing, return an empty JSON array [].
+"""
 
 _EXTRACT_SYSTEM_TMPL = """\
 You are a knowledge curator. Given a source document, extract the key ideas,
@@ -485,65 +274,28 @@ async def ingest_source(
             rag_chunks=rag_chunks,
         )
 
-    # 3b. Extract ideas (split if needed)
-    chunks = splitter.split(source_text)
-    chunk_count = len(chunks)
-    log.info("Extracting ideas", source=source_name, chunks=chunk_count)
+    # 3b. Extract ideas — Map / Merge / Verify pipeline
+    log.info("Extracting ideas", source=source_name)
+    selected_ideas = await _extract_ideas_map_reduce(
+        source_text,
+        source_name=source_name,
+        source_type=source_type,
+        router=router,
+    )
 
-    extract_system = _EXTRACT_SYSTEM_TMPL.format(max_concepts=max_concepts)
-    all_ideas: list[dict[str, object]] = []
-    for i, chunk in enumerate(chunks, 1):
-        log.info("Extracting chunk", chunk=i, of=chunk_count, chars=len(chunk))
-        user_prompt = _extract_prompt(
-            chunk, source_name,
-            source_type=source_type,
-            chunk_index=i,
-            total_chunks=chunk_count,
-        )
-        raw = await router.call(
-            user_prompt,
-            task="compile",
-            system=extract_system,
-        )
-        ideas = _parse_ideas(raw)
-        if not ideas:
-            dump_path = Path(__file__).parents[2] / "data" / f"debug_chunk_{i}_of_{chunk_count}.txt"
-            dump_path.parent.mkdir(parents=True, exist_ok=True)
-            dump_path.write_text(
-                f"=== SYSTEM PROMPT ===\n{extract_system}\n\n"
-                f"=== USER PROMPT ===\n{user_prompt}\n\n"
-                f"=== LLM RESPONSE ===\n{raw}\n",
-                encoding="utf-8",
-            )
-            log.warning(
-                "Chunk produced no ideas — full prompt+response dumped to file",
-                chunk=i, of=chunk_count,
-                dump_file=str(dump_path.resolve()),
-            )
-        else:
-            log.info("Chunk ideas extracted", chunk=i, count=len(ideas))
-        all_ideas.extend(ideas)
-
-    if not all_ideas:
+    if not selected_ideas:
         log.warning("No ideas extracted — skipping", source=source_name)
         return IngestResult(
             source_path=source, skipped=True,
             skip_reason="LLM returned no extractable ideas",
         )
 
-    log.info("Ideas extracted", source=source_name, total=len(all_ideas))
-    selected_ideas = _rank_extracted_ideas(all_ideas, max_concepts=max_concepts)
-    log.info(
-        "Ideas selected",
-        source=source_name,
-        selected=len(selected_ideas),
-        raw=len(all_ideas),
-    )
+    log.info("Ideas extracted", source=source_name, total=len(selected_ideas))
 
     # 4. Compile each idea into a wiki page
     index_mgr  = IndexManager(index_path)
     wiki_log   = WikiLog(log_path)
-    result     = IngestResult(source_path=source, chunk_count=chunk_count)
+    result     = IngestResult(source_path=source)
     inferred_domain = domain_from_str(domain) if domain else TagDomain.MISC
     extra_tags = normalize_tags(tags or [])
 
@@ -562,7 +314,7 @@ async def ingest_source(
         page_path = slug_to_path(wiki_dir, idea_title)
         is_update = page_path.exists()
         log.info(
-            f"Compiling page {idx}/{min(len(all_ideas), 10)}",
+            f"Compiling page {idx}/{len(selected_ideas)}",
             title=idea_title, domain=idea_domain.value,
             action="update" if is_update else "create",
         )
@@ -627,7 +379,7 @@ async def ingest_source(
         "Ingest complete", source=source_name,
         pages_written=len(result.pages_written),
         pages_updated=len(result.pages_updated),
-        chunks=chunk_count, cost=f"${router.session_cost:.4f}",
+        cost=f"${router.session_cost:.4f}",
     )
 
     # Record quality analytics for all ingests
@@ -637,13 +389,13 @@ async def ingest_source(
             source_type=source_type,
             source=source,
             source_text=source_text,
-            all_ideas=all_ideas,
+            all_ideas=selected_ideas,
             result=result,
             wiki_dir=wiki_dir,
         )
 
     # Background extraction consensus eval (fire-and-forget, never blocks ingest)
-    if db_path and all_ideas:
+    if db_path and selected_ideas:
         asyncio.ensure_future(
             _eval_extraction_background(
                 source_name=source_name,
@@ -891,6 +643,190 @@ def _strip_frontmatter(text: str) -> str:
     return re.sub(r"^---\n.*?\n---\n?", "", text, flags=re.DOTALL).lstrip()
 
 
+# ---------------------------------------------------------------------------
+# Map / Merge / Verify pipeline (new extraction path)
+# ---------------------------------------------------------------------------
+
+def _parse_and_validate_ideas(
+    raw: str,
+    *,
+    chunk_id: int | None = None,
+) -> list[dict[str, object]]:
+    """Parse JSON from LLM output, validate each item against IdeaSchema.
+    If chunk_id is given, overrides whatever the LLM returned for that field.
+    """
+    import json, re
+    cleaned = raw.strip()
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL).strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+    cleaned = re.sub(r"\s*```$", "", cleaned.strip())
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, dict):
+            for v in data.values():
+                if isinstance(v, list):
+                    data = v
+                    break
+        if not isinstance(data, list):
+            return []
+    except (json.JSONDecodeError, ValueError):
+        log.debug("_parse_and_validate_ideas: JSON parse failed", raw_preview=raw[:200])
+        return []
+
+    validated: list[dict[str, object]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        if chunk_id is not None:
+            item = {**item, "chunk_id": chunk_id}
+        try:
+            validated.append(IdeaSchema.model_validate(item).model_dump())
+        except ValidationError:
+            log.debug("Idea failed schema validation, skipping", item=item)
+    return validated
+
+
+async def _extract_chunk_ideas(
+    chunk: str,
+    chunk_id: int,
+    *,
+    router: "ModelRouter",
+    source_name: str = "",
+    source_type: str = "article",
+) -> list[dict[str, object]]:
+    """Map stage: extract ideas from a single chunk with schema validation."""
+    hint = _SOURCE_TYPE_HINTS.get(source_type, f"a {source_type}")
+    prompt = (
+        f"Source: {source_name} (chunk {chunk_id})\n"
+        f"Type: {hint}\n\n"
+        f"---\n{chunk}\n---"
+    )
+    raw = await router.call(prompt, task="compile", system=_EXTRACT_SYSTEM)
+    ideas = _parse_and_validate_ideas(raw, chunk_id=chunk_id)
+    log.info("Chunk extracted", chunk_id=chunk_id, ideas=len(ideas))
+    return ideas
+
+
+def _evidence_quality(idea: dict[str, object]) -> float:
+    """0.0–1.0 based on number of evidence items (capped at 3)."""
+    evidence = idea.get("evidence") or []
+    if not isinstance(evidence, list):
+        return 0.0
+    return min(len(evidence), 3) / 3.0
+
+
+def _recurrence_score(
+    idea: dict[str, object],
+    all_chunks: list[list[dict[str, object]]],
+) -> int:
+    """Count how many chunks contain an idea with overlapping title."""
+    from mymem.evals.metrics import rouge1_f1
+    title = str(idea.get("title", ""))
+    return sum(
+        1 for chunk in all_chunks
+        if any(rouge1_f1(title, str(c.get("title", ""))) >= 0.4 for c in chunk)
+    )
+
+
+async def _merge_ideas(
+    chunk_idea_lists: list[list[dict[str, object]]],
+    *,
+    router: "ModelRouter",
+) -> list[dict[str, object]]:
+    """Merge stage: score by recurrence × importance × evidence_quality, then LLM merge."""
+    import json as _json
+    all_ideas: list[dict[str, object]] = [
+        idea for chunk in chunk_idea_lists for idea in chunk
+    ]
+    if not all_ideas:
+        return []
+
+    # Score and annotate each candidate
+    scored: list[dict[str, object]] = []
+    for idea in all_ideas:
+        rec = _recurrence_score(idea, chunk_idea_lists)
+        imp = float(idea.get("importance", 3))
+        evq = _evidence_quality(idea)
+        scored.append({**idea, "recurrence_count": rec, "_score": rec * imp * max(evq, 0.1)})
+
+    ranked = sorted(scored, key=lambda x: -float(x.get("_score", 0)))
+    # Strip internal score field before sending to LLM
+    candidates = [{k: v for k, v in r.items() if k != "_score"} for r in ranked]
+
+    prompt = (
+        f"Merge and deduplicate these extracted ideas.\n\n"
+        f"{_json.dumps(candidates, indent=2)}"
+    )
+    raw = await router.call(prompt, task="merge", system=_MERGE_SYSTEM)
+    merged = _parse_and_validate_ideas(raw)
+    if not merged:
+        # Fallback: return ranked candidates without the recurrence_count field
+        merged = [{k: v for k, v in c.items() if k != "recurrence_count"} for c in candidates[:10]]
+        merged = _parse_and_validate_ideas(_json.dumps(merged))
+    log.info("Merge complete", input=len(all_ideas), output=len(merged))
+    return merged
+
+
+async def _verify_ideas(
+    source_text: str,
+    merged_ideas: list[dict[str, object]],
+    *,
+    router: "ModelRouter",
+) -> list[dict[str, object]]:
+    """Verify stage: one 'what's missing?' LLM turn. Appends new ideas, capped at 1."""
+    import json as _json
+    if not merged_ideas:
+        return merged_ideas
+
+    preview = source_text[:8000]
+    prompt = (
+        f"Source:\n---\n{preview}\n---\n\n"
+        f"Extracted ideas so far:\n{_json.dumps(merged_ideas, indent=2)}\n\n"
+        "List any important source ideas that are missing from the extraction above. "
+        "Use the same JSON schema. If nothing is missing, return an empty JSON array []."
+    )
+    raw = await router.call(prompt, task="compile", system=_VERIFY_SYSTEM)
+    new_ideas = _parse_and_validate_ideas(raw)
+
+    if not new_ideas:
+        return merged_ideas
+
+    # Dedup: skip any new idea whose title already exists in merged_ideas
+    existing_titles = {str(i.get("title", "")).lower() for i in merged_ideas}
+    appended = [i for i in new_ideas if str(i.get("title", "")).lower() not in existing_titles]
+    log.info("Verify complete", new_ideas=len(appended))
+    return merged_ideas + appended
+
+
+async def _extract_ideas_map_reduce(
+    source_text: str,
+    source_name: str,
+    source_type: str,
+    *,
+    router: "ModelRouter",
+) -> list[dict[str, object]]:
+    """Map → Merge → Verify pipeline. Always chunks, even short sources."""
+    chunks = splitter.split(source_text)
+    log.info("Map stage", source=source_name, chunks=len(chunks))
+
+    chunk_idea_lists = []
+    for i, chunk in enumerate(chunks):
+        ideas = await _extract_chunk_ideas(
+            chunk, chunk_id=i,
+            router=router,
+            source_name=source_name,
+            source_type=source_type,
+        )
+        chunk_idea_lists.append(ideas)
+
+    merged = await _merge_ideas(chunk_idea_lists, router=router)
+    if not merged:
+        return []
+
+    final = await _verify_ideas(source_text, merged, router=router)
+    return final
+
+
 async def _eval_extraction_background(
     *,
     source_name: str,
@@ -902,7 +838,7 @@ async def _eval_extraction_background(
 ) -> None:
     """
     Fire-and-forget background task: run reference LLM extraction and score consensus.
-    Skips silently if GROQ_API_KEY / GEMINI_API_KEY is not configured.
+    Skips silently if no API key is configured for the reference provider.
     Never raises — all errors are logged and swallowed.
     """
     try:
@@ -910,6 +846,7 @@ async def _eval_extraction_background(
         from mymem.evals.extraction_consensus import (
             GROQ_DEFAULT_MODEL,
             NVIDIA_DEFAULT_MODEL,
+            OPENROUTER_DEFAULT_MODEL,
             run_extraction_consensus,
         )
         from mymem.evals.store import save_extraction_consensus
@@ -927,6 +864,9 @@ async def _eval_extraction_background(
         elif provider == "nvidia":
             api_key = settings.nvidia_api_key
             ref_model = NVIDIA_DEFAULT_MODEL
+        elif provider == "openrouter":
+            api_key = settings.openrouter_api_key
+            ref_model = OPENROUTER_DEFAULT_MODEL
         else:
             api_key = None
             ref_model = ""
@@ -948,6 +888,7 @@ async def _eval_extraction_background(
                 groq_api_key=api_key if provider == "groq" else "",
                 gemini_api_key=api_key if provider == "gemini" else "",
                 nvidia_api_key=api_key if provider == "nvidia" else "",
+                openrouter_api_key=api_key if provider == "openrouter" else "",
             )
 
         pipeline_model = router.task_router.model_for("compile") if hasattr(router, "task_router") else "unknown"

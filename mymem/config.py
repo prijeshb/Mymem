@@ -96,7 +96,8 @@ class Settings(BaseSettings):
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
     nvidia_api_key: str | None = Field(default=None, alias="NVIDIA_API_KEY")
-    eval_reference_provider: Literal["groq", "gemini", "nvidia"] = "groq"
+    openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
+    eval_reference_provider: Literal["groq", "gemini", "nvidia", "openrouter"] = "groq"
 
     # Sub-configs populated by load_config()
     paths: PathsConfig = Field(default_factory=PathsConfig)

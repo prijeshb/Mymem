@@ -10,6 +10,8 @@ import pytest
 
 from unittest.mock import AsyncMock, patch
 
+import mymem.pipeline.readers as readers_mod
+
 from mymem.pipeline.ingest import (
     IngestResult, ingest_source, _parse_ideas, _strip_frontmatter,
     _is_youtube_url, _html_to_text, _read_source, _extract_video_id, _read_youtube,
@@ -385,8 +387,6 @@ class TestReadYoutube:
     @pytest.mark.asyncio
     async def test_fetches_english_transcript(self, monkeypatch):
         """api.fetch() is called with English language preference."""
-        import mymem.pipeline.ingest as ingest_mod
-
         called_with: list[dict] = []
         fake_snippets = [self._make_snippet(e["text"]) for e in self.FAKE_ENTRIES]
 
@@ -395,8 +395,8 @@ class TestReadYoutube:
                 called_with.append({"video_id": video_id, "languages": languages})
                 return fake_snippets
 
-        monkeypatch.setattr(ingest_mod, "YouTubeTranscriptApi", FakeAPIInstance)
-        monkeypatch.setattr(ingest_mod, "_YT_AVAILABLE", True)
+        monkeypatch.setattr(readers_mod, "YouTubeTranscriptApi", FakeAPIInstance)
+        monkeypatch.setattr(readers_mod, "_YT_AVAILABLE", True)
 
         text = await _read_youtube(self.TARGET_URL)
         assert self.VIDEO_ID in text
@@ -408,16 +408,14 @@ class TestReadYoutube:
     @pytest.mark.asyncio
     async def test_transcript_joined_as_plain_text(self, monkeypatch):
         """Snippet texts are joined into a single readable string."""
-        import mymem.pipeline.ingest as ingest_mod
-
         fake_snippets = [self._make_snippet(e["text"]) for e in self.FAKE_ENTRIES]
 
         class FakeAPIInstance:
             def fetch(self, video_id, languages=None):
                 return fake_snippets
 
-        monkeypatch.setattr(ingest_mod, "YouTubeTranscriptApi", FakeAPIInstance)
-        monkeypatch.setattr(ingest_mod, "_YT_AVAILABLE", True)
+        monkeypatch.setattr(readers_mod, "YouTubeTranscriptApi", FakeAPIInstance)
+        monkeypatch.setattr(readers_mod, "_YT_AVAILABLE", True)
 
         text = await _read_youtube(self.TARGET_URL)
         assert "Hello and welcome" in text
@@ -427,8 +425,6 @@ class TestReadYoutube:
     @pytest.mark.asyncio
     async def test_falls_back_to_any_language_when_english_missing(self, monkeypatch):
         """When English is unavailable, falls back to any available transcript."""
-        import mymem.pipeline.ingest as ingest_mod
-
         fallback_snippet = self._make_snippet("Bonjour tout le monde.")
 
         class FakeTranscript:
@@ -441,13 +437,13 @@ class TestReadYoutube:
 
         class FakeAPIInstance:
             def fetch(self, video_id, languages=None):
-                raise ingest_mod.NoTranscriptFound(video_id, languages, [])
+                raise readers_mod.NoTranscriptFound(video_id, languages, [])
 
             def list(self, video_id):
                 return FakeTranscriptList()
 
-        monkeypatch.setattr(ingest_mod, "YouTubeTranscriptApi", FakeAPIInstance)
-        monkeypatch.setattr(ingest_mod, "_YT_AVAILABLE", True)
+        monkeypatch.setattr(readers_mod, "YouTubeTranscriptApi", FakeAPIInstance)
+        monkeypatch.setattr(readers_mod, "_YT_AVAILABLE", True)
 
         text = await _read_youtube(self.TARGET_URL)
         assert "Bonjour" in text
@@ -455,14 +451,12 @@ class TestReadYoutube:
     @pytest.mark.asyncio
     async def test_raises_when_transcripts_disabled(self, monkeypatch):
         """RuntimeError raised when the video has transcripts disabled."""
-        import mymem.pipeline.ingest as ingest_mod
-
         class FakeAPIInstance:
             def fetch(self, video_id, languages=None):
-                raise ingest_mod.TranscriptsDisabled(video_id)
+                raise readers_mod.TranscriptsDisabled(video_id)
 
-        monkeypatch.setattr(ingest_mod, "YouTubeTranscriptApi", FakeAPIInstance)
-        monkeypatch.setattr(ingest_mod, "_YT_AVAILABLE", True)
+        monkeypatch.setattr(readers_mod, "YouTubeTranscriptApi", FakeAPIInstance)
+        monkeypatch.setattr(readers_mod, "_YT_AVAILABLE", True)
 
         with pytest.raises(RuntimeError, match="Transcripts are disabled"):
             await _read_youtube(self.TARGET_URL)
@@ -470,8 +464,7 @@ class TestReadYoutube:
     @pytest.mark.asyncio
     async def test_raises_when_package_not_installed(self, monkeypatch):
         """RuntimeError raised with install instructions when package missing."""
-        import mymem.pipeline.ingest as ingest_mod
-        monkeypatch.setattr(ingest_mod, "_YT_AVAILABLE", False)
+        monkeypatch.setattr(readers_mod, "_YT_AVAILABLE", False)
 
         with pytest.raises(RuntimeError, match="pip install youtube-transcript-api"):
             await _read_youtube(self.TARGET_URL)
@@ -479,12 +472,10 @@ class TestReadYoutube:
     @pytest.mark.asyncio
     async def test_auto_detected_from_url_in_read_source(self, monkeypatch):
         """_read_source auto-detects YouTube URLs without needing source_type=youtube."""
-        import mymem.pipeline.ingest as ingest_mod
-
         async def fake_read_youtube(url: str) -> str:
             return f"[YouTube transcript — video ID: {self.VIDEO_ID}]\n\nAuto-detected transcript."
 
-        monkeypatch.setattr(ingest_mod, "_read_youtube", fake_read_youtube)
+        monkeypatch.setattr(readers_mod, "_read_youtube", fake_read_youtube)
 
         # No source_type passed — should still hit the YouTube path
         text = await _read_source(self.TARGET_URL)
@@ -615,7 +606,6 @@ class TestFetchYoutubeMetadata:
 
     @pytest.mark.asyncio
     async def test_returns_empty_dict_when_yt_dlp_not_installed(self, monkeypatch):
-        import mymem.pipeline.ingest as ingest_mod
         import builtins
         real_import = builtins.__import__
 
@@ -675,23 +665,18 @@ class TestReadYoutubeEnriched:
 
     @pytest.mark.asyncio
     async def test_enriched_output_includes_title_and_transcript(self, monkeypatch):
-        import mymem.pipeline.ingest as ingest_mod
-
         fake_snippets = [self._make_snippet(e["text"]) for e in self.FAKE_ENTRIES]
 
         class FakeAPIInstance:
             def fetch(self, video_id, languages=None):
                 return fake_snippets
 
-        monkeypatch.setattr(ingest_mod, "YouTubeTranscriptApi", FakeAPIInstance)
-        monkeypatch.setattr(ingest_mod, "_YT_AVAILABLE", True)
-        monkeypatch.setattr(ingest_mod, "_fetch_youtube_metadata",
-                            lambda url: asyncio.coroutine(lambda: self.FAKE_META)())
-
         async def fake_meta(url):
             return self.FAKE_META
 
-        monkeypatch.setattr(ingest_mod, "_fetch_youtube_metadata", fake_meta)
+        monkeypatch.setattr(readers_mod, "YouTubeTranscriptApi", FakeAPIInstance)
+        monkeypatch.setattr(readers_mod, "_YT_AVAILABLE", True)
+        monkeypatch.setattr(readers_mod, "_fetch_youtube_metadata", fake_meta)
 
         text = await _read_youtube(self.TARGET_URL)
         assert "Understanding Transformers" in text
@@ -701,21 +686,18 @@ class TestReadYoutubeEnriched:
 
     @pytest.mark.asyncio
     async def test_falls_back_to_transcript_only_when_no_metadata(self, monkeypatch):
-        import mymem.pipeline.ingest as ingest_mod
-
         fake_snippets = [self._make_snippet(e["text"]) for e in self.FAKE_ENTRIES]
 
         class FakeAPIInstance:
             def fetch(self, video_id, languages=None):
                 return fake_snippets
 
-        monkeypatch.setattr(ingest_mod, "YouTubeTranscriptApi", FakeAPIInstance)
-        monkeypatch.setattr(ingest_mod, "_YT_AVAILABLE", True)
-
         async def fake_meta_empty(url):
             return {}
 
-        monkeypatch.setattr(ingest_mod, "_fetch_youtube_metadata", fake_meta_empty)
+        monkeypatch.setattr(readers_mod, "YouTubeTranscriptApi", FakeAPIInstance)
+        monkeypatch.setattr(readers_mod, "_YT_AVAILABLE", True)
+        monkeypatch.setattr(readers_mod, "_fetch_youtube_metadata", fake_meta_empty)
 
         text = await _read_youtube(self.TARGET_URL)
         assert self.VIDEO_ID in text
@@ -750,8 +732,6 @@ class TestHtmlFetchEncoding:
         """When trafilatura is available, _read_source calls fetch_url directly
         instead of httpx — trafilatura handles decompression, encoding, and
         extraction internally, avoiding brotli/charset issues entirely."""
-        import mymem.pipeline.ingest as ingest_mod
-
         fetched_urls: list[str] = []
 
         class FakeTrafilatura:
@@ -765,7 +745,7 @@ class TestHtmlFetchEncoding:
                     "The companies that survived were those that paired intelligence with restraint."
                 )
 
-        monkeypatch.setattr(ingest_mod, "trafilatura", FakeTrafilatura)
+        monkeypatch.setattr(readers_mod, "trafilatura", FakeTrafilatura)
 
         url = "https://chamath.substack.com/p/2025-annual-letter"
         text = await _read_source(url, source_type="newsletter")
@@ -777,10 +757,9 @@ class TestHtmlFetchEncoding:
     @pytest.mark.asyncio
     async def test_falls_back_to_httpx_when_trafilatura_missing(self, monkeypatch):
         """When trafilatura is not installed, _read_source falls back to httpx."""
-        import mymem.pipeline.ingest as ingest_mod
         import httpx
 
-        monkeypatch.setattr(ingest_mod, "trafilatura", None)
+        monkeypatch.setattr(readers_mod, "trafilatura", None)
 
         article_bytes = b"<html><body><p>Fallback content via httpx.</p></body></html>"
 
@@ -828,9 +807,8 @@ class TestHtmlFetchEncoding:
         """.encode("utf-8")
 
         import httpx
-        import mymem.pipeline.ingest as ingest_mod
 
-        monkeypatch.setattr(ingest_mod, "trafilatura", None)
+        monkeypatch.setattr(readers_mod, "trafilatura", None)
 
         class FakeResponse:
             status_code = 200
@@ -882,8 +860,7 @@ class TestReadSourceDispatch:
         async def fake_youtube(url: str) -> str:
             return "[YouTube transcript — video ID: dQw4w9WgXcQ]\n\nFake transcript."
 
-        import mymem.pipeline.ingest as ingest_mod
-        monkeypatch.setattr(ingest_mod, "_read_youtube", fake_youtube)
+        monkeypatch.setattr(readers_mod, "_read_youtube", fake_youtube)
 
         text = await _read_source("https://youtu.be/dQw4w9WgXcQ", source_type="youtube")
         assert "YouTube transcript" in text
@@ -894,8 +871,7 @@ class TestReadSourceDispatch:
         async def fake_youtube(url: str) -> str:
             return "[YouTube transcript — video ID: ABCDE]\n\nFake transcript."
 
-        import mymem.pipeline.ingest as ingest_mod
-        monkeypatch.setattr(ingest_mod, "_read_youtube", fake_youtube)
+        monkeypatch.setattr(readers_mod, "_read_youtube", fake_youtube)
 
         # source_type=youtube forces YouTube reader
         text = await _read_source("https://youtu.be/ABCDE12345A", source_type="youtube")

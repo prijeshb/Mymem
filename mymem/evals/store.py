@@ -26,18 +26,20 @@ CREATE INDEX IF NOT EXISTS idx_er_type ON eval_runs(eval_type, run_at);
 
 _CREATE_CONSENSUS = """
 CREATE TABLE IF NOT EXISTS extraction_consensus (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_at           TEXT    NOT NULL,
-    source_id        TEXT    NOT NULL,
-    source_type      TEXT    NOT NULL,
-    pipeline_model   TEXT    NOT NULL,
-    reference_model  TEXT    NOT NULL,
-    consensus_score  REAL    NOT NULL,
-    thesis_captured  INTEGER NOT NULL,
-    grade            TEXT    NOT NULL,
-    gaps_json        TEXT    NOT NULL,
-    false_pos_json   TEXT    NOT NULL,
-    full_result_json TEXT    NOT NULL DEFAULT '{}'
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_at                TEXT    NOT NULL,
+    source_id             TEXT    NOT NULL,
+    source_type           TEXT    NOT NULL,
+    pipeline_model        TEXT    NOT NULL,
+    reference_model       TEXT    NOT NULL,
+    consensus_score       REAL    NOT NULL,
+    thesis_captured       INTEGER NOT NULL,
+    grade                 TEXT    NOT NULL,
+    gaps_json             TEXT    NOT NULL,
+    false_pos_json        TEXT    NOT NULL,
+    full_result_json      TEXT    NOT NULL DEFAULT '{}',
+    evidence_support_rate REAL    NOT NULL DEFAULT 0.0,
+    duplicate_rate        REAL    NOT NULL DEFAULT 0.0
 );
 CREATE INDEX IF NOT EXISTS idx_ec_score ON extraction_consensus(consensus_score);
 """
@@ -65,6 +67,16 @@ def _ensure_consensus(db_path: Path) -> None:
             conn.execute(
                 "ALTER TABLE extraction_consensus "
                 "ADD COLUMN full_result_json TEXT NOT NULL DEFAULT '{}'"
+            )
+        if "evidence_support_rate" not in columns:
+            conn.execute(
+                "ALTER TABLE extraction_consensus "
+                "ADD COLUMN evidence_support_rate REAL NOT NULL DEFAULT 0.0"
+            )
+        if "duplicate_rate" not in columns:
+            conn.execute(
+                "ALTER TABLE extraction_consensus "
+                "ADD COLUMN duplicate_rate REAL NOT NULL DEFAULT 0.0"
             )
 
 
@@ -125,8 +137,8 @@ def save_extraction_consensus(db_path: Path, result: "ExtractionConsensusResult"
             """INSERT INTO extraction_consensus
                (run_at, source_id, source_type, pipeline_model, reference_model,
                 consensus_score, thesis_captured, grade, gaps_json, false_pos_json,
-                full_result_json)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                full_result_json, evidence_support_rate, duplicate_rate)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 datetime.now(UTC).isoformat(timespec="seconds"),
                 result.source_id,
@@ -139,6 +151,8 @@ def save_extraction_consensus(db_path: Path, result: "ExtractionConsensusResult"
                 json.dumps(list(result.gaps)),
                 json.dumps(list(result.false_positives)),
                 json.dumps(asdict(result), default=str),
+                result.evidence_support_rate,
+                result.duplicate_rate,
             ),
         )
 
@@ -153,6 +167,8 @@ def recent_consensus_runs(
 
     order: "recent_first" (default) | "worst_first" (lowest consensus_score first)
     """
+    if order not in ("recent_first", "worst_first"):
+        raise ValueError(f"Invalid order: {order!r}. Must be 'recent_first' or 'worst_first'.")
     try:
         _ensure_consensus(db_path)
         order_clause = (

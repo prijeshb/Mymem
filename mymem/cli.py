@@ -408,11 +408,13 @@ def eval_review(
             return
 
     table = Table(title="Extraction Consensus Review (worst first)", show_lines=True)
-    table.add_column("Source",          style="cyan",  max_width=30)
-    table.add_column("Type",            style="dim",   width=10)
-    table.add_column("Score",           justify="right", width=6)
-    table.add_column("Grade",           width=6)
-    table.add_column("Thesis",          width=7)
+    table.add_column("Source",    style="cyan",  max_width=28)
+    table.add_column("Type",      style="dim",   width=9)
+    table.add_column("Score",     justify="right", width=6)
+    table.add_column("Grade",     width=6)
+    table.add_column("Thesis",    width=7)
+    table.add_column("Evidence",  justify="right", width=9)
+    table.add_column("Dups",      justify="right", width=6)
     table.add_column("Gaps (reference found, pipeline missed)", style="yellow")
 
     grade_color = {"PASS": "green", "WARN": "yellow", "FAIL": "red"}
@@ -422,19 +424,26 @@ def eval_review(
         color = grade_color.get(grade, "white")
         gaps_text = ", ".join(r["gaps"]) if r["gaps"] else "[dim]none[/dim]"
         thesis_icon = "✓" if r["thesis_captured"] else "[red]✗[/red]"
+        ev_rate = r.get("evidence_support_rate", 0.0)
+        dup_rate = r.get("duplicate_rate", 0.0)
+        ev_color = "green" if ev_rate >= 0.80 else "yellow" if ev_rate >= 0.50 else "red"
+        dup_color = "green" if dup_rate < 0.10 else "yellow" if dup_rate < 0.25 else "red"
         table.add_row(
             r["source_id"],
             r["source_type"],
             f"{r['consensus_score']:.2f}",
             f"[{color}]{grade}[/]",
             thesis_icon,
+            f"[{ev_color}]{ev_rate:.0%}[/]",
+            f"[{dup_color}]{dup_rate:.0%}[/]",
             gaps_text,
         )
 
     console.print(table)
     console.print(
         f"\n[dim]Showing {len(runs)} runs. "
-        "Gaps = ideas the reference model found that the pipeline missed.[/dim]"
+        "Evidence = fraction of ideas with source quotes. "
+        "Dups = near-duplicate idea pair rate.[/dim]"
     )
 
 

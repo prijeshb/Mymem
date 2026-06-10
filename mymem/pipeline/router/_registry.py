@@ -35,12 +35,17 @@ class DefaultModelRegistry(IModelRegistry):
             ModelSpec("claude-haiku-4-5-20251001", "anthropic", 200_000, 0.80, 4.0),
             ModelSpec("claude-sonnet-4-6",         "anthropic", 200_000, 3.0,  15.0),
             ModelSpec("claude-opus-4-6",           "anthropic", 200_000, 15.0, 75.0),
-            # ── NVIDIA ────────────────────────────────────────────────────────
-            ModelSpec("meta/llama-3.3-70b-instruct",              "nvidia", 128_000, 0.0, 0.0),
-            ModelSpec("nvidia/llama-3.1-nemotron-70b-instruct",   "nvidia", 128_000, 0.0, 0.0),
-            ModelSpec("nvidia/llama-3.3-nemotron-super-49b-v1",   "nvidia", 128_000, 0.0, 0.0),
-            ModelSpec("mistralai/mistral-large-2-instruct",       "nvidia", 128_000, 0.0, 0.0),
+            # ── NVIDIA NIM (free credits available) ──────────────────────────
+            ModelSpec("meta/llama-3.3-70b-instruct",                "nvidia", 128_000, 0.0, 0.0),
+            ModelSpec("nvidia/llama-3.1-nemotron-70b-instruct",     "nvidia", 128_000, 0.0, 0.0),
+            ModelSpec("nvidia/llama-3.3-nemotron-super-49b-v1",     "nvidia", 128_000, 0.0, 0.0),
+            ModelSpec("mistralai/mistral-large-2-instruct",         "nvidia", 128_000, 0.0, 0.0),
             ModelSpec("nvidia/llama-3.1-nemotron-nano-8b-instruct", "nvidia", 128_000, 0.0, 0.0),
+            # ── OpenRouter free tier ─────────────────────────────────────────
+            ModelSpec("mistralai/mistral-7b-instruct:free",         "openrouter", 32_768, 0.0, 0.0),
+            ModelSpec("microsoft/phi-3-mini-128k-instruct:free",    "openrouter", 128_000, 0.0, 0.0),
+            ModelSpec("google/gemma-3-27b-it:free",                 "openrouter", 131_072, 0.0, 0.0),
+            ModelSpec("meta-llama/llama-3.2-3b-instruct:free",      "openrouter", 131_072, 0.0, 0.0),
         ]
         for spec in entries:
             self.register(spec)

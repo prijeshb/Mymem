@@ -184,6 +184,7 @@ export async function postIngest(payload: {
   source_type: SourceType;
   tags: string[];
   domain: string;
+  max_concepts?: number;
 }): Promise<IngestResult> {
   const res = await fetch(`${BASE}/api/ingest`, {
     method: 'POST',
@@ -200,12 +201,14 @@ export async function postUpload(
   sourceType: SourceType,
   domain: string,
   tags: string[],
+  maxConcepts?: number,
 ): Promise<IngestResult> {
   const fd = new FormData();
   fd.append('file', file);
   fd.append('source_type', sourceType);
   fd.append('domain', domain);
   fd.append('tags', tags.join(','));
+  if (maxConcepts !== undefined) fd.append('max_concepts', String(maxConcepts));
   const res = await fetch(`${BASE}/api/upload`, { method: 'POST', body: fd });
   return parseResponse<IngestResult>(res, 'Upload failed');
 }
@@ -216,11 +219,12 @@ export async function postIngestText(
   sourceType: SourceType,
   domain: string,
   tags: string[],
+  maxConcepts?: number,
 ): Promise<IngestResult> {
   const res = await fetch(`${BASE}/api/ingest-text`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, title, source_type: sourceType, domain, tags }),
+    body: JSON.stringify({ text, title, source_type: sourceType, domain, tags, max_concepts: maxConcepts }),
   });
   return parseResponse<IngestResult>(res, 'Ingest failed');
 }

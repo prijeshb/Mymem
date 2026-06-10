@@ -11,6 +11,7 @@ from mymem.pipeline.router._types import (
 )
 from mymem.pipeline.router._chain import OllamaFallbackChain
 from mymem.pipeline.router._cost import SessionCostTracker
+from mymem.pipeline.router._credentials import KeyMapCredentials, ProviderCredentials
 from mymem.pipeline.router._registry import DefaultModelRegistry
 from mymem.pipeline.router._utils import estimate_tokens, fits_context
 
@@ -56,21 +57,26 @@ class ModelRouter:
         openai_api_key: str = "",
         groq_api_key: str = "",
         nvidia_api_key: str = "",
+        openrouter_api_key: str = "",
         ollama_base_url: str = "http://localhost:11434",
         ollama_timeout: int = 120,
         cost_alert_usd: float = 1.0,
         llm_fn: LLMCallable | None = None,
         db_path: Path | None = None,
+        credentials: ProviderCredentials | None = None,
         # Injectable abstractions
         registry: IModelRegistry | None = None,
         fallback_chain: IFallbackChain | None = None,
         cost_tracker: ICostTracker | None = None,
     ) -> None:
         self._provider       = provider
-        self._ant_key        = anthropic_api_key
-        self._oai_key        = openai_api_key
-        self._groq_key       = groq_api_key
-        self._nvidia_key     = nvidia_api_key
+        self._creds: ProviderCredentials = credentials or KeyMapCredentials.from_kwargs(
+            anthropic=anthropic_api_key,
+            openai=openai_api_key,
+            groq=groq_api_key,
+            nvidia=nvidia_api_key,
+            openrouter=openrouter_api_key,
+        )
         self._ollama_url     = ollama_base_url
         self._ollama_timeout = ollama_timeout
         self._llm_fn         = llm_fn
@@ -141,10 +147,7 @@ class ModelRouter:
                         max_tokens=max_tokens,
                         ollama_base_url=self._ollama_url,
                         ollama_timeout=self._ollama_timeout,
-                        anthropic_api_key=self._ant_key,
-                        openai_api_key=self._oai_key,
-                        groq_api_key=self._groq_key,
-                        nvidia_api_key=self._nvidia_key,
+                        **self._creds.to_llm_kwargs(),
                     )
                     in_tokens  = estimate_tokens(prompt)
                     out_tokens = estimate_tokens(result)
@@ -178,13 +181,17 @@ def router_from_settings(settings: object, llm_fn: LLMCallable | None = None) ->
     for task in ("classify", "merge", "introspect", "export_slides", "export_charts"):
         if hasattr(s.models, task):
             task_models[task] = getattr(s.models, task)
+    creds = KeyMapCredentials.from_kwargs(
+        anthropic=s.anthropic_api_key or "",
+        openai=s.openai_api_key or "",
+        groq=s.groq_api_key or "",
+        nvidia=s.nvidia_api_key or "",
+        openrouter=s.openrouter_api_key or "",
+    )
     return ModelRouter(
         task_models=task_models,
         provider=s.provider,
-        anthropic_api_key=s.anthropic_api_key or "",
-        openai_api_key=s.openai_api_key or "",
-        groq_api_key=s.groq_api_key or "",
-        nvidia_api_key=s.nvidia_api_key or "",
+        credentials=creds,
         ollama_base_url=s.ollama.base_url,
         ollama_timeout=s.ollama.timeout_s,
         cost_alert_usd=s.observability.cost_alert_usd,
