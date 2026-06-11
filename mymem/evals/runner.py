@@ -175,6 +175,7 @@ async def run_evals(cfg: EvalConfig) -> EvalReport:
                 "mean_richness": wq.mean_richness,
                 "stub_rate": round(wq.stub_rate, 3),
                 "confidence_states": states,
+                "grade": wq.grade,
             })
         except Exception as exc:
             log.warning("wiki quality eval failed", error=str(exc), exc_info=True)
@@ -201,6 +202,7 @@ async def run_evals(cfg: EvalConfig) -> EvalReport:
             save_run(evals_db, "chunking", {
                 "ablation_rows": len(ablation),
                 "recommended_max_tokens": cr.recommended_max_tokens,
+                "grade": cr.grade,
             })
         except Exception as exc:
             log.warning("chunking eval failed", error=str(exc), exc_info=True)

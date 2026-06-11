@@ -54,6 +54,16 @@ class WikiQualityReport:
     def no_wikilinks_rate(self) -> float:
         return self.no_wikilinks_count / self.total_pages if self.total_pages else 0.0
 
+    @property
+    def grade(self) -> str:
+        if self.total_pages == 0:
+            return "WARN"  # nothing to grade — not a failure
+        if self.stub_rate < 0.10 and self.mean_richness >= 6.0:
+            return "PASS"
+        if self.stub_rate < 0.25 and self.mean_richness >= 3.0:
+            return "WARN"
+        return "FAIL"
+
 
 def score_page(page: WikiPage) -> PageScore:
     body_chars = len(page.body)

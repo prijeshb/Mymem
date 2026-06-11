@@ -772,3 +772,31 @@ class TestApiArchived:
         (wiki_dir / "active-page.md").write_text(self._ACTIVE_PAGE, encoding="utf-8")
         r = client.get("/api/archived")
         assert r.json() == []
+
+
+# ---------------------------------------------------------------------------
+# POST /api/evals/run — trigger eval suite in background
+# ---------------------------------------------------------------------------
+
+class TestEvalsRun:
+    def test_starts_background_run(self, client: TestClient, tmp_path: Path) -> None:
+        client.app.state.db_path = tmp_path / "data" / "mymem.db"
+        with patch("mymem.evals.runner.run_evals", new=AsyncMock()):
+            resp = client.post("/api/evals/run", json={})
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["started"] is True
+        assert body["llm_judge"] is False
+
+    def test_llm_judge_flag_accepted(self, client: TestClient, tmp_path: Path) -> None:
+        client.app.state.db_path = tmp_path / "data" / "mymem.db"
+        with patch("mymem.evals.runner.run_evals", new=AsyncMock()):
+            resp = client.post("/api/evals/run", json={"llm_judge": True})
+        assert resp.status_code == 202
+        assert resp.json()["llm_judge"] is True
+
+    def test_rejects_concurrent_run(self, client: TestClient, tmp_path: Path) -> None:
+        client.app.state.db_path = tmp_path / "data" / "mymem.db"
+        client.app.state.evals_running = True
+        resp = client.post("/api/evals/run", json={})
+        assert resp.status_code == 409

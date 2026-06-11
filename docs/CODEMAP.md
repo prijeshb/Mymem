@@ -18,7 +18,9 @@
 | Add a new API endpoint | `mymem/web/routes/api.py` → `@router.get/post(...)` | Any line after existing endpoints |
 | Add a new frontend API call | `frontend/src/lib/api.ts` → new `export async function` | Follow existing pattern |
 | Add a new frontend type | `frontend/src/lib/types.ts` → new `export interface` | Any line |
-| Change eval grading thresholds | `mymem/evals/extraction_consensus.py` → `_grade()` | Line ~150 |
+| Change eval grading thresholds | `mymem/evals/extraction_consensus.py` → `_grade()`; `RetrievalReport.grade` / `WikiQualityReport.grade` / `ChunkingReport.grade` properties | per-module |
+| Trigger eval suite from UI | `mymem/web/routes/api.py` → `api_evals_run` (POST /api/evals/run); `EvalsPage.tsx` → `startRun` | 409 guard via `app.state.evals_running` |
+| Change eval dashboard suite cards | `frontend/src/components/EvalSuiteGrid.tsx` → `SUITES` registry + `metricsFor()` | mirrors runner.py registrations |
 | Add eval metric | `mymem/evals/extraction_consensus.py` + `mymem/evals/store.py` (schema migration) | PRAGMA migration pattern |
 | Change model defaults / fallback chain | `mymem/pipeline/router/_registry.py`, `mymem/pipeline/router/_chain.py` | `DefaultModelRegistry._seed()`, `OllamaFallbackChain` |
 | Add a domain or source type constant | `frontend/src/lib/types.ts` → `ALL_DOMAINS` or `SOURCE_TYPES` | Lines 6–15 |
@@ -106,7 +108,7 @@ pages/
   GraphPage.tsx             D3 force-directed wikilink network
   IngestPage.tsx            3 tabs: URL | Upload | Paste — all share SharedFields component
   IntrospectPage.tsx        Daily summary, quiz generator, knowledge digest, curiosity trends
-  EvalsPage.tsx             Extraction consensus eval history table
+  EvalsPage.tsx             Suite summary grid + run trigger + extraction consensus table
   NotFoundPage.tsx          404
 
 components/
@@ -117,6 +119,7 @@ components/
   ClaudeLoader.tsx          Animated loading indicator
   ErrorBanner.tsx           Dismissible error message
   ThemeToggle.tsx           Dark/light mode button
+  EvalSuiteGrid.tsx         Eval suite cards: grade badge, metrics, staleness, never-run state
 
 lib/
   api.ts                    All fetch() wrappers for /api/* endpoints
@@ -201,6 +204,7 @@ patchPage(slug, { domain, tags })
 deletePage(slug)
 streamQuery({ question, domain, save })     // async generator → SSEEvent
 fetchEvalsExtraction(limit?, order?, grade?) → EvalsExtractionResult
+postEvalsRun(llmJudge?) → { started, llm_judge }   // POST /api/evals/run, 409 if active
 ```
 
 ### `ModelRouter.call()` — `mymem/pipeline/router/_router.py:111`

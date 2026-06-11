@@ -165,6 +165,17 @@ export async function fetchEvalsSummary(): Promise<Record<string, EvalRun>> {
   return res.json();
 }
 
+export async function postEvalsRun(
+  llmJudge = false,
+): Promise<{ started: boolean; llm_judge: boolean }> {
+  const res = await fetch(`${BASE}/api/evals/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ llm_judge: llmJudge }),
+  });
+  return parseResponse<{ started: boolean; llm_judge: boolean }>(res, 'Eval run failed to start');
+}
+
 export async function fetchEvalsExtraction(
   limit = 50,
   order: 'recent_first' | 'worst_first' = 'recent_first',

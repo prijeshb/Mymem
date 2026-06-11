@@ -45,6 +45,14 @@ class ChunkingReport:
     recommended_max_tokens: int = 1024
     current_max_tokens: int = 1024
 
+    @property
+    def grade(self) -> str:
+        # Informational eval — PASS when the ablation produced a recommendation,
+        # WARN otherwise. Never FAIL: there is no wrong answer, only missing data.
+        if self.ablation and self.recommended_max_tokens > 0:
+            return "PASS"
+        return "WARN"
+
 
 def chunk_size_ablation(
     text: str,

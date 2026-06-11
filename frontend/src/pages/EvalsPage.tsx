@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { fetchEvalsExtraction } from '../lib/api';
-import type { ExtractionConsensusRun, EvalGrade } from '../lib/types';
+import { Button } from '@heroui/react';
+import { fetchEvalsExtraction, fetchEvalsSummary, postEvalsRun } from '../lib/api';
+import type { ExtractionConsensusRun, EvalGrade, EvalRun } from '../lib/types';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { EvalSuiteGrid } from '../components/EvalSuiteGrid';
 
 // ── Grade badge ───────────────────────────────────────────────────────────────
 
@@ -167,10 +169,37 @@ type GradeFilter = EvalGrade | '';
 
 export function EvalsPage() {
   const [runs, setRuns]         = useState<ExtractionConsensusRun[]>([]);
+  const [summary, setSummary]   = useState<Record<string, EvalRun> | null>(null);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState('');
   const [order, setOrder]       = useState<OrderKey>('recent_first');
   const [grade, setGrade]       = useState<GradeFilter>('');
+  const [running, setRunning]   = useState(false);
+  const [judge, setJudge]       = useState(false);
+
+  const startRun = async () => {
+    setRunning(true);
+    setError('');
+    try {
+      await postEvalsRun(judge);
+      // Background run — poll the summary a few times so fresh grades appear
+      for (let i = 0; i < 5; i++) {
+        await new Promise(r => setTimeout(r, 4000));
+        const s = await fetchEvalsSummary().catch(() => null);
+        if (s) setSummary(s);
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchEvalsSummary()
+      .then(setSummary)
+      .catch(() => setSummary({}));   // grid degrades to "never run" cards
+  }, []);
 
   useEffect(() => {
     setLoading(true);
@@ -191,10 +220,39 @@ export function EvalsPage() {
     <div className="max-w-5xl mx-auto py-6 space-y-6">
 
       {/* ── Header ── */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Eval Dashboard</h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-          Extraction consensus — pipeline vs. reference LLM agreement after each ingest.
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Eval Dashboard</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            Latest results across all eval suites — extraction detail below.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={judge}
+              onChange={e => setJudge(e.target.checked)}
+              disabled={running}
+              className="rounded border-gray-300 dark:border-gray-600 text-indigo-600
+                         focus:ring-indigo-500 cursor-pointer"
+            />
+            LLM judge (RAGAS)
+          </label>
+          <Button variant="primary" size="sm" onPress={startRun} isDisabled={running}>
+            {running ? 'Running…' : 'Run evals'}
+          </Button>
+        </div>
+      </div>
+
+      {/* ── Suite summary grid ── */}
+      {summary !== null && <EvalSuiteGrid summary={summary} extractionRuns={runs} />}
+
+      {/* ── Extraction section ── */}
+      <div className="pt-2">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Extraction consensus runs</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+          Pipeline vs. reference LLM agreement after each ingest.
         </p>
       </div>
 

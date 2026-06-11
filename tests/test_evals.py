@@ -13,7 +13,7 @@ import pytest
 from mymem.evals.metrics import bm25_score, duplicate_rate, rouge1_f1, tfidf_cosine
 from mymem.evals.hope import HopeScore, aggregate_hope, score_chunk, score_chunks
 from mymem.evals.chunking import AblationRow, chunk_size_ablation, efficiency_report, optimal_max_tokens
-from mymem.evals.ingest_quality import PageScore, score_page, wiki_quality_report
+from mymem.evals.ingest_quality import PageScore, WikiQualityReport, score_page, wiki_quality_report
 from mymem.evals.confidence import ConfidenceScore, LifecycleState, score_confidence
 from mymem.evals.retrieval import CaseResult, RetrievalCase, RetrievalReport, _udcg, load_cases, run_bm25_eval
 from mymem.evals.store import latest_runs, save_run
@@ -355,3 +355,52 @@ class TestStore:
     def test_missing_db_returns_empty(self, tmp_path):
         runs = latest_runs(tmp_path / "nonexistent.db")
         assert runs == []
+
+
+# ---------------------------------------------------------------------------
+# Grade properties — wiki quality + chunking (mirror RetrievalReport.grade)
+# ---------------------------------------------------------------------------
+
+class TestWikiQualityGrade:
+    def _report(self, total=10, stubs=0, richness=9.0):
+        return WikiQualityReport(
+            total_pages=total, mean_richness=richness, median_richness=richness,
+            stub_count=stubs, no_wikilinks_count=0, no_tags_count=0,
+        )
+
+    def test_healthy_wiki_passes(self):
+        assert self._report(total=10, stubs=0, richness=9.0).grade == "PASS"
+
+    def test_some_stubs_warns(self):
+        # 15% stubs, decent richness → WARN
+        assert self._report(total=20, stubs=3, richness=5.0).grade == "WARN"
+
+    def test_many_stubs_fails(self):
+        # 30% stubs → FAIL
+        assert self._report(total=10, stubs=3, richness=5.0).grade == "FAIL"
+
+    def test_low_richness_fails(self):
+        assert self._report(total=10, stubs=0, richness=2.0).grade == "FAIL"
+
+    def test_empty_wiki_warns(self):
+        # No pages = nothing to grade — WARN, not FAIL
+        assert self._report(total=0, stubs=0, richness=0.0).grade == "WARN"
+
+
+class TestChunkingGrade:
+    def test_ablation_with_recommendation_passes(self):
+        from mymem.evals.chunking import ChunkingReport
+        rows = chunk_size_ablation("word " * 500)
+        report = ChunkingReport(ablation=rows, recommended_max_tokens=1024)
+        assert report.grade == "PASS"
+
+    def test_empty_ablation_warns(self):
+        from mymem.evals.chunking import ChunkingReport
+        report = ChunkingReport(ablation=[], recommended_max_tokens=1024)
+        assert report.grade == "WARN"
+
+    def test_no_recommendation_warns(self):
+        from mymem.evals.chunking import ChunkingReport
+        rows = chunk_size_ablation("word " * 500)
+        report = ChunkingReport(ablation=rows, recommended_max_tokens=0)
+        assert report.grade == "WARN"

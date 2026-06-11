@@ -20,6 +20,7 @@
 | ADR-004 | External integrations (Obsidian, NotebookLM, Notion) | Accepted |
 | ADR-005 | Agent decomposition strategy (4 agents + 2 subagents) | Accepted |
 | ADR-006 | Extraction quality improvements | Accepted |
+| ADR-007 | Lightweight entity layer instead of full GraphRAG | Accepted |
 
 ## Completed Features
 
@@ -42,12 +43,15 @@
 | Map-reduce extraction for long sources | `mymem/pipeline/ingest.py` | DONE |
 | Idea dedup + ranking (cosine sim > 0.85) | `mymem/pipeline/ingest.py` | DONE |
 | Evals API endpoints (/api/evals/extraction, /api/evals/summary) | `mymem/web/routes/api.py` | DONE |
+| Eval suite summary grid (cards, staleness, never-run states) | `frontend/src/components/EvalSuiteGrid.tsx` | DONE |
+| Eval run trigger (POST /api/evals/run + UI button, RAGAS flag) | `mymem/web/routes/api.py`, `EvalsPage.tsx` | DONE |
+| Grades for wiki_quality + chunking summaries | `mymem/evals/ingest_quality.py`, `chunking.py` | DONE |
 
 ## Security Status
-- **Last Audit**: 2026-06-10
+- **Last Audit**: 2026-06-11
 - **Verdict**: PASS
-- **Open Issues**: 0 critical, 0 high (fixed), 2 medium (SSRF localhost scope, rate limiting), 3 low
-- **Fixed This Session**: str(exc) info disclosure in upload + ingest-text endpoints; SQL ORDER BY allowlist guard in store.py
+- **Open Issues**: 0 critical, 0 high, 2 medium (SSRF localhost scope, rate limiting), 3 low
+- **Fixed This Session**: none needed — scan clean
 - **Compliance**: local-first tool, no PII handling
 
 ## Known Gaps
@@ -59,6 +63,15 @@
 ## Planned Features
 
 ### Proposed
+- [ ] Graph entity mapping — priority: P0 — PRD: docs/PRD/graph-entity-mapping.md (branch V1-0007)
+  - Typed entity extraction folded into ingest LLM call (person/project/system/org/concept + span)
+  - 3-tier resolution: exact/alias → rapidfuzz+cosine → batched LLM judge (Graphiti pattern)
+  - `data/graph.db`: entities/aliases/mentions; shared-entity edges join pages
+  - 1-hop graph expansion + RRF fusion into existing hybrid retrieval
+  - Alias frontmatter + deterministic unlinked-mention linter (Obsidian pattern)
+  - Evals: entity consensus + span-grounding; KGQAGen-style multi-hop A/B; ship gates:
+    multi-hop recall up, single-hop no regression, ingest cost < +20%
+  - NOT building: community detection/summaries (ADR-007)
 - [ ] Human review track for extraction eval (`mymem/evals/review.py`, `mymem eval --review`)
 - [ ] Wire extraction consensus into `EvalReport` (`runner.py` surfaces consensus results)
 - [ ] Ontology layer — typed relationships (is-a, part-of, contradicts, etc.)
@@ -75,4 +88,4 @@
 - Extraction consensus PASS rate on ingested articles (3 runs recorded: 2× WARN, 1× PASS)
 - Mean duplicate concept pairs per ingest (target: near 0 after dedup)
 - Wiki page coverage: ideas from full document via map-reduce (no longer limited to 6000 chars)
-- Test suite: 568 tests passing as of 2026-06-10
+- Test suite: 579 tests passing as of 2026-06-11

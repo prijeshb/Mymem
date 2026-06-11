@@ -941,6 +941,44 @@ async def api_evals_history(request: Request, limit: int = 30) -> JSONResponse:
     return JSONResponse(history_by_type(evals_db, limit_per_type=max(1, min(limit, 100))))
 
 
+class EvalsRunRequest(BaseModel):
+    llm_judge: bool = False
+
+
+@router.post("/evals/run", status_code=202)
+async def api_evals_run(request: Request, req: EvalsRunRequest) -> JSONResponse:
+    """Trigger the eval suite in the background. 409 if a run is already active."""
+    import asyncio
+
+    from mymem.evals import runner as eval_runner
+
+    app_state = request.app.state
+    if getattr(app_state, "evals_running", False):
+        raise HTTPException(status_code=409, detail="An eval run is already in progress.")
+
+    db_path: Path = app_state.db_path
+    cfg = eval_runner.EvalConfig(
+        wiki_dir=app_state.wiki_dir,
+        data_dir=db_path.parent,
+        run_llm_judge=req.llm_judge,
+        run_extraction_consensus=True,
+        router=app_state.router if req.llm_judge else None,
+    )
+
+    async def _run() -> None:
+        try:
+            await eval_runner.run_evals(cfg)
+            log.info("Background eval run complete", llm_judge=req.llm_judge)
+        except Exception as exc:
+            log.exception("Background eval run failed", error=str(exc))
+        finally:
+            app_state.evals_running = False
+
+    app_state.evals_running = True
+    asyncio.ensure_future(_run())
+    return JSONResponse({"started": True, "llm_judge": req.llm_judge}, status_code=202)
+
+
 @router.get("/evals/extraction")
 async def api_evals_extraction(
     request: Request,
