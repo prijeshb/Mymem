@@ -24,6 +24,9 @@ dependencies = [
     # Storage
     "sqlite-vec==0.1.9",       # vector search in SQLite
 
+    # Graph entity layer (ADR-007)
+    "rapidfuzz==3.14.5",       # alias/fuzzy name matching for entity resolution
+
     # Ingestion
     "httpx>=0.28.0",           # URL fetching (fallback)
     "trafilatura>=2.0.0",      # primary article/URL extraction
