@@ -21,7 +21,9 @@ from rich.table import Table
 
 app          = typer.Typer(name="mymem", help="Personal LLM-powered knowledge base.", add_completion=False)
 obsidian_app = typer.Typer(name="obsidian", help="Obsidian vault integration.")
+graph_app    = typer.Typer(name="graph", help="Entity graph operations (ADR-007).")
 app.add_typer(obsidian_app, name="obsidian")
+app.add_typer(graph_app, name="graph")
 console = Console()
 err     = Console(stderr=True, style="red")
 
@@ -327,6 +329,78 @@ def tags() -> None:
         color = "green" if w >= 2.0 else ("dim" if w < 0.5 else "yellow")
         table.add_row(str(i["domain"]), str(i["tag"]), f"{w:.2f}", f"[{color}]{trend}[/]")
 
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# mymem graph
+# ---------------------------------------------------------------------------
+
+def _graph_db_path(settings) -> Path:  # type: ignore[no-untyped-def]
+    return Path(settings.paths.db).parent / "graph.db"
+
+
+@graph_app.command("backfill")
+def graph_backfill(
+    classify: bool = typer.Option(False, "--classify",
+        help="Also run Tier-2 LLM classification (types + aliases)"),
+    limit: int = typer.Option(0, "--limit",
+        help="Cap Tier-2 candidates per run (0 = no cap)"),
+) -> None:
+    """Migrate the existing wiki into the entity graph (Tier 1 + optional Tier 2).
+
+    Tier 1 is structural and idempotent — safe to re-run any time as repair.
+    """
+    settings = _get_settings()
+    wiki_dir, *_ = _paths(settings)
+    graph_db = _graph_db_path(settings)
+
+    from mymem.graph.backfill import classify_entities, seed_from_wiki
+    from mymem.graph.store import init_db
+
+    init_db(graph_db)
+    report = _run(seed_from_wiki(graph_db, wiki_dir))
+
+    table = Table(title="Tier-1 Structural Seed", show_lines=False)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Count", justify="right")
+    table.add_row("Wiki pages", str(report.pages))
+    table.add_row("Page entities", str(report.page_entities))
+    table.add_row("Linked mentions", str(report.linked_mentions))
+    table.add_row("Broken-link entities (new)", str(report.broken_link_entities))
+    table.add_row("Total mentions", str(report.total_mentions))
+    console.print(table)
+
+    if classify:
+        router = _make_router(settings)
+        creport = _run(classify_entities(graph_db, router=router, limit=limit))
+        console.print(
+            f"[green]Tier-2 classify:[/] {creport.classified}/{creport.candidates} "
+            "entities typed (aliases proposed where obvious)"
+        )
+
+
+@graph_app.command("stats")
+def graph_stats() -> None:
+    """Show entity graph health metrics (explosion alarms)."""
+    settings = _get_settings()
+    graph_db = _graph_db_path(settings)
+
+    if not graph_db.exists():
+        console.print("[dim]No graph database yet. Run `mymem graph backfill` first.[/]")
+        return
+
+    from mymem.graph.store import stats as graph_store_stats
+    s = graph_store_stats(graph_db)
+
+    table = Table(title="Entity Graph", show_lines=False)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", justify="right")
+    table.add_row("Entities", str(s.total_entities))
+    table.add_row("Mentions", str(s.total_mentions))
+    table.add_row("Singletons (≤1 page)", str(s.singleton_count))
+    rate_color = "red" if s.singleton_rate > 0.8 else ("yellow" if s.singleton_rate > 0.5 else "green")
+    table.add_row("Singleton rate", f"[{rate_color}]{s.singleton_rate:.0%}[/]")
     console.print(table)
 
 
