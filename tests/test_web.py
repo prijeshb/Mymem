@@ -800,3 +800,50 @@ class TestEvalsRun:
         client.app.state.evals_running = True
         resp = client.post("/api/evals/run", json={})
         assert resp.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Graph cleanup on page delete / archive
+# ---------------------------------------------------------------------------
+
+class TestGraphCleanupHooks:
+    def _seed_graph(self, tmp_path: Path, slug: str) -> Path:
+        from mymem.graph.store import add_mention, init_db, upsert_entity
+
+        graph_db = tmp_path / "data" / "graph.db"
+        init_db(graph_db)
+        e = upsert_entity(graph_db, "Some Entity", entity_type="concept")
+        add_mention(graph_db, e.id, slug, source_id="ingest")
+        return graph_db
+
+    def test_delete_page_cleans_graph_mentions(
+        self, client: TestClient, wiki_dir: Path, tmp_path: Path
+    ) -> None:
+        from mymem.graph.store import mentions_for_page
+        from mymem.wiki.page import write_page
+
+        page = _make_page("Doomed Page")
+        page = __import__("dataclasses").replace(page, path=wiki_dir / page.path)
+        write_page(page)
+        graph_db = self._seed_graph(tmp_path, "doomed-page")
+        client.app.state.db_path = tmp_path / "data" / "mymem.db"
+
+        resp = client.delete("/api/page/doomed-page")
+        assert resp.status_code == 200
+        assert mentions_for_page(graph_db, "doomed-page") == []
+
+    def test_archive_page_cleans_graph_mentions(
+        self, client: TestClient, wiki_dir: Path, tmp_path: Path
+    ) -> None:
+        from mymem.graph.store import mentions_for_page
+        from mymem.wiki.page import write_page
+
+        page = _make_page("Shelved Page")
+        page = __import__("dataclasses").replace(page, path=wiki_dir / page.path)
+        write_page(page)
+        graph_db = self._seed_graph(tmp_path, "shelved-page")
+        client.app.state.db_path = tmp_path / "data" / "mymem.db"
+
+        resp = client.post("/api/page/shelved-page/archive")
+        assert resp.status_code == 200
+        assert mentions_for_page(graph_db, "shelved-page") == []

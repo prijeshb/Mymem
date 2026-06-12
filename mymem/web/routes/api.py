@@ -538,8 +538,8 @@ async def api_related_web(
             if page_path.exists():
                 from mymem.wiki.page import read_page as _read_page
                 page_body = _read_page(page_path).body
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("related-web: page body unavailable", page=page_slug, error=str(exc))
 
     async def _generate() -> AsyncIterator[str]:
         for title in titles:
@@ -592,6 +592,22 @@ async def api_page_update(slug: str, req: PageUpdateRequest, request: Request) -
 # DELETE /api/page/{slug}
 # ---------------------------------------------------------------------------
 
+def _graph_cleanup(request: Request, slug: str) -> None:
+    """Remove a deleted/archived page's mentions from the entity graph.
+
+    Best-effort: graph cleanup must never block or fail the page operation.
+    """
+    try:
+        from mymem.graph.store import delete_page as graph_delete_page
+
+        graph_db: Path = request.app.state.db_path.parent / "graph.db"
+        if graph_db.exists():
+            removed = graph_delete_page(graph_db, slug)
+            log.info("Graph cleanup", page=slug, mentions_removed=removed)
+    except Exception as exc:
+        log.warning("Graph cleanup failed", page=slug, error=str(exc))
+
+
 @router.delete("/page/{slug:path}")
 async def api_page_delete(slug: str, request: Request) -> JSONResponse:
     from mymem.wiki.page import read_page
@@ -611,6 +627,8 @@ async def api_page_delete(slug: str, request: Request) -> JSONResponse:
     index_path = wiki_dir / "index.md"
     if index_path.exists():
         IndexManager(index_path).remove(page.title)
+
+    _graph_cleanup(request, slug)
 
     return JSONResponse({"ok": True, "deleted": slug})
 
@@ -642,6 +660,8 @@ async def api_page_archive(slug: str, request: Request) -> JSONResponse:
     index_path = wiki_dir / "index.md"
     if index_path.exists():
         IndexManager(index_path).remove(page.title)
+
+    _graph_cleanup(request, slug)
 
     return JSONResponse({"ok": True, "archived": True})
 
@@ -746,7 +766,8 @@ async def api_daily(request: Request, limit: int = 14) -> JSONResponse:
                 "body":  page.body,
                 "slug":  f"daily/{md_file.stem}",
             })
-        except Exception:
+        except Exception as exc:
+            log.debug("daily summary unreadable, skipped", file=md_file.name, error=str(exc))
             continue
 
     return JSONResponse(results)

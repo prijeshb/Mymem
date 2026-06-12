@@ -399,7 +399,11 @@ def graph_stats() -> None:
     table.add_row("Entities", str(s.total_entities))
     table.add_row("Mentions", str(s.total_mentions))
     table.add_row("Singletons (≤1 page)", str(s.singleton_count))
-    rate_color = "red" if s.singleton_rate > 0.8 else ("yellow" if s.singleton_rate > 0.5 else "green")
+    rate_color = (
+        "red" if s.singleton_rate > 0.8
+        else "yellow" if s.singleton_rate > 0.5
+        else "green"
+    )
     table.add_row("Singleton rate", f"[{rate_color}]{s.singleton_rate:.0%}[/]")
     console.print(table)
 

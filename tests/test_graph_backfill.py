@@ -20,7 +20,6 @@ from mymem.graph.backfill import (
 from mymem.graph.store import (
     find_entity,
     init_db,
-    list_entities,
     mentions_for_page,
     stats,
     upsert_entity,

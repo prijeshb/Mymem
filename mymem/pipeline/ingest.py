@@ -332,8 +332,8 @@ async def ingest_source(
         if is_update:
             try:
                 existing_created = read_page(page_path).created
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Could not read existing created date", page=str(page_path), error=str(exc))
 
         page = WikiPage(
             title=idea_title,
@@ -402,6 +402,18 @@ async def ingest_source(
                 source_type=source_type,
                 source_text=source_text,
                 pipeline_ideas=selected_ideas,
+                router=router,
+                db_path=db_path,
+            )
+        )
+
+    # Background entity graph extraction (fire-and-forget, never blocks ingest)
+    if db_path and all_touched:
+        asyncio.ensure_future(
+            _graph_extract_background(
+                source_name=source_name,
+                source_text=source_text,
+                page_titles=list(all_touched),
                 router=router,
                 db_path=db_path,
             )
@@ -504,8 +516,8 @@ def _record_ingest_analytics(
             p = read_page(page_path)
             page_chars.append(len(p.body))
             page_wikilinks.append(len(p.wikilinks()))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Analytics: page unreadable", page=str(page_path), error=str(exc))
 
     avg_chars = sum(page_chars) / len(page_chars) if page_chars else 0.0
     avg_links = sum(page_wikilinks) / len(page_wikilinks) if page_wikilinks else 0.0
@@ -825,6 +837,59 @@ async def _extract_ideas_map_reduce(
 
     final = await _verify_ideas(source_text, merged, router=router)
     return final
+
+
+async def _graph_extract_background(
+    *,
+    source_name: str,
+    source_text: str,
+    page_titles: list[str],
+    router: "ModelRouter",
+    db_path: Path,
+) -> None:
+    """
+    Fire-and-forget: extract entities from the source, resolve against the
+    entity catalog, and record mentions on the pages this ingest touched.
+    Never raises — graph failures must not affect ingest.
+    """
+    try:
+        from mymem.graph.extractor import extract_entities
+        from mymem.graph.resolver import resolve_entities
+        from mymem.graph.store import add_mention, init_db, upsert_entity
+        from mymem.wiki.types import slugify
+
+        graph_db = db_path.parent / "graph.db"
+        init_db(graph_db)
+
+        extracted = await extract_entities(source_text, router=router)
+        if not extracted:
+            return
+
+        resolutions = await resolve_entities(graph_db, extracted, router=router)
+        slugs = [slugify(title) for title in page_titles]
+
+        for entity, resolution in zip(extracted, resolutions, strict=True):
+            entity_id = resolution.entity_id
+            if entity_id is None:
+                entity_id = upsert_entity(
+                    graph_db,
+                    entity.name,
+                    entity_type=entity.type,
+                    description=entity.description,
+                ).id
+            for slug in slugs:
+                add_mention(
+                    graph_db, entity_id, slug, span=entity.span, source_id=source_name
+                )
+
+        log.info(
+            "Graph extraction complete",
+            source=source_name, entities=len(extracted), pages=len(slugs),
+        )
+    except Exception as exc:
+        log.warning(
+            "Graph extraction failed (background)", source=source_name, error=str(exc)
+        )
 
 
 async def _eval_extraction_background(
