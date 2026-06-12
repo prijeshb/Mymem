@@ -241,6 +241,43 @@ def add_alias(db_path: Path, entity_id: int, alias: str) -> None:
         conn.close()
 
 
+def update_entity_type(db_path: Path, entity_id: int, entity_type: str) -> None:
+    """Set the type of an existing entity (used by Tier-2 classify backfill)."""
+    _validate_type(entity_type)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            _require_entity(conn, entity_id)
+            conn.execute(
+                "UPDATE entities SET type = ?, updated = ? WHERE id = ?",
+                (entity_type, _now(), entity_id),
+            )
+    finally:
+        conn.close()
+
+
+def delete_mentions_by_source(db_path: Path, source_ids: tuple[str, ...]) -> int:
+    """Delete all mentions whose source_id is in *source_ids*.
+
+    Lets structural (tier-1) mentions be wiped and rebuilt on re-seed while
+    ingest-derived mentions survive. Returns the number removed.
+    """
+    if not source_ids:
+        return 0
+    conn = _connect(db_path)
+    try:
+        with conn:
+            # f-string injects only "?" placeholder marks — values stay parameterized
+            marks = ",".join("?" * len(source_ids))
+            cur = conn.execute(
+                f"DELETE FROM mentions WHERE source_id IN ({marks})",  # noqa: S608
+                source_ids,
+            )
+            return cur.rowcount
+    finally:
+        conn.close()
+
+
 def add_mention(
     db_path: Path,
     entity_id: int,

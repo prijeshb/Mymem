@@ -286,3 +286,43 @@ def test_entity_is_immutable(db: Path) -> None:
     e = upsert_entity(db, "RAG", entity_type="concept")
     with pytest.raises(AttributeError):
         e.canonical = "changed"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# update_entity_type / delete_mentions_by_source (backfill support)
+# ---------------------------------------------------------------------------
+
+class TestUpdateEntityType:
+    def test_updates_type(self, db: Path) -> None:
+        from mymem.graph.store import update_entity_type
+        e = upsert_entity(db, "Sarah Chen", entity_type="concept")
+        update_entity_type(db, e.id, "person")
+        got = get_entity(db, e.id)
+        assert got is not None and got.type == "person"
+
+    def test_invalid_type_raises(self, db: Path) -> None:
+        from mymem.graph.store import update_entity_type
+        e = upsert_entity(db, "X", entity_type="concept")
+        with pytest.raises(ValueError, match="type"):
+            update_entity_type(db, e.id, "alien")
+
+    def test_missing_entity_raises(self, db: Path) -> None:
+        from mymem.graph.store import update_entity_type
+        with pytest.raises(ValueError, match="entity"):
+            update_entity_type(db, 999, "person")
+
+
+class TestDeleteMentionsBySource:
+    def test_deletes_only_matching_sources(self, db: Path) -> None:
+        from mymem.graph.store import delete_mentions_by_source
+        e = upsert_entity(db, "RAG", entity_type="concept")
+        add_mention(db, e.id, "p1", source_id="tier1-wikilink")
+        add_mention(db, e.id, "p1", source_id="ingest")
+        removed = delete_mentions_by_source(db, ("tier1-wikilink", "tier1-broken-link"))
+        assert removed == 1
+        remaining = mentions_for_page(db, "p1")
+        assert len(remaining) == 1 and remaining[0].source_id == "ingest"
+
+    def test_empty_sources_is_noop(self, db: Path) -> None:
+        from mymem.graph.store import delete_mentions_by_source
+        assert delete_mentions_by_source(db, ()) == 0
