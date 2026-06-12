@@ -30,6 +30,8 @@
 | Add a new eval module | Subclass `mymem/evals/_base.py:Evaluator[T]`, register in `mymem/evals/runner.py` | |
 | Add an entity type | `mymem/graph/store.py` → `ENTITY_TYPES` (validated everywhere from this tuple) | |
 | Tune entity resolution thresholds | `mymem/graph/resolver.py` → `FUZZY_ACCEPT` / `FUZZY_BORDERLINE` / `COSINE_ACCEPT` | |
+| Migrate/repair the entity graph | `mymem graph backfill [--classify]` → `mymem/graph/backfill.py` | Tier-1 re-seed is idempotent |
+| Change graph-on-ingest behavior | `mymem/pipeline/ingest.py` → `_graph_extract_background()` | fire-and-forget |
 
 ---
 
@@ -58,6 +60,7 @@ graph/                      Entity layer (ADR-007) — data/graph.db
   store.py                  entities/aliases/mentions repository + delete_page() pruning + stats()
   extractor.py              extract_entities() — typed JSON extraction + rapidfuzz span grounding
   resolver.py               resolve_entities() — 3-tier: exact/alias → fuzzy+cosine → batched LLM judge
+  backfill.py               seed_from_wiki() (Tier-1, idempotent repair) + classify_entities() (Tier-2 LLM)
   ingest.py                 ingest_source() — full pipeline: read→scan→extract→compile→index→log
   query.py                  query_wiki() — search wiki + RAG + LLM synthesis → SSE stream
   lint.py                   lint_wiki() — orphan/broken-link/stub detection (pure Python, no LLM)

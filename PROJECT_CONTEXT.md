@@ -63,8 +63,9 @@
 ## Planned Features
 
 ### In Progress
-- [ ] Graph entity mapping — branch V1-0007 — status: Phase 1 modules done
-  (store/extractor/resolver, 73 tests, 100% cov); next: ingest wiring + Tier-1 backfill
+- [ ] Graph entity mapping — branch V1-0007 — status: Phase 1 + 1.5 done
+  (store/extractor/resolver/backfill, `mymem graph backfill|stats` CLI, ingest hook,
+  delete/archive cleanup); next: Phase 2 (lint unlinked mentions) + Phase 3 (retrieval RRF)
 
 ### Proposed
 - [x] Graph entity mapping Phase 1 core — PRD: docs/PRD/graph-entity-mapping.md
@@ -92,4 +93,4 @@
 - Extraction consensus PASS rate on ingested articles (3 runs recorded: 2× WARN, 1× PASS)
 - Mean duplicate concept pairs per ingest (target: near 0 after dedup)
 - Wiki page coverage: ideas from full document via map-reduce (no longer limited to 6000 chars)
-- Test suite: 652 tests passing as of 2026-06-11
+- Test suite: 684 tests passing as of 2026-06-12
