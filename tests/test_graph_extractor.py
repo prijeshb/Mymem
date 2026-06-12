@@ -12,7 +12,6 @@ import pytest
 from mymem.graph.extractor import ExtractedEntity, extract_entities
 from mymem.pipeline.router import ModelRouter
 
-
 SOURCE = (
     "Sarah Chen leads the platform team at Acme Corp. "
     "Her team built MyMem, a personal wiki system that uses "

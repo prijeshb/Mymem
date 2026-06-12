@@ -62,8 +62,12 @@
 
 ## Planned Features
 
+### In Progress
+- [ ] Graph entity mapping — branch V1-0007 — status: Phase 1 modules done
+  (store/extractor/resolver, 73 tests, 100% cov); next: ingest wiring + Tier-1 backfill
+
 ### Proposed
-- [ ] Graph entity mapping — priority: P0 — PRD: docs/PRD/graph-entity-mapping.md (branch V1-0007)
+- [x] Graph entity mapping Phase 1 core — PRD: docs/PRD/graph-entity-mapping.md
   - Typed entity extraction folded into ingest LLM call (person/project/system/org/concept + span)
   - 3-tier resolution: exact/alias → rapidfuzz+cosine → batched LLM judge (Graphiti pattern)
   - `data/graph.db`: entities/aliases/mentions; shared-entity edges join pages
@@ -88,4 +92,4 @@
 - Extraction consensus PASS rate on ingested articles (3 runs recorded: 2× WARN, 1× PASS)
 - Mean duplicate concept pairs per ingest (target: near 0 after dedup)
 - Wiki page coverage: ideas from full document via map-reduce (no longer limited to 6000 chars)
-- Test suite: 579 tests passing as of 2026-06-11
+- Test suite: 652 tests passing as of 2026-06-11

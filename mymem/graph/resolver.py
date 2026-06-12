@@ -58,24 +58,38 @@ class Resolution:
     score: float
 
     @staticmethod
-    def new() -> "Resolution":
+    def new() -> Resolution:
         return Resolution(entity_id=None, tier="new", score=0.0)
 
 
+def _pair_score(name: str, candidate: str, name_tokens: int) -> float:
+    """token_sort_ratio, upgraded to 100 when *name* (>= 2 tokens) is a full
+    token-subset of *candidate* — the short-form wiki link pattern
+    ('Transactional Outbox' for 'Transactional Outbox Pattern'). Single-token
+    names are excluded: 'AI' is a subset of half the catalog."""
+    score = fuzz.token_sort_ratio(name, candidate, processor=utils.default_process)
+    if name_tokens >= 2:
+        subset = fuzz.token_set_ratio(name, candidate, processor=utils.default_process)
+        if subset == 100.0:
+            return 100.0
+    return float(score)
+
+
 def _best_fuzzy(name: str, catalog: list[Entity]) -> tuple[Entity | None, float]:
-    """Best token_sort_ratio across all canonicals and aliases."""
+    """Best fuzzy score across all canonicals and aliases."""
+    name_tokens = len(utils.default_process(name).split())
     best: Entity | None = None
     best_score = 0.0
     for entity in catalog:
         for candidate in (entity.canonical, *entity.aliases):
-            score = fuzz.token_sort_ratio(name, candidate, processor=utils.default_process)
+            score = _pair_score(name, candidate, name_tokens)
             if score > best_score:
                 best, best_score = entity, score
     return best, best_score
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(x * x for x in b))
     return dot / (na * nb) if na and nb else 0.0

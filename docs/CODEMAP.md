@@ -28,6 +28,8 @@
 | Change RAG chunking | `mymem/rag/wiki_chunker.py` (wiki), `mymem/rag/pdf_parser.py` (PDFs) | |
 | Change embedding model or dim | `mymem/rag/embedder.py` → `EMBED_MODEL`, `EMBED_DIM` | Lines 20–21 |
 | Add a new eval module | Subclass `mymem/evals/_base.py:Evaluator[T]`, register in `mymem/evals/runner.py` | |
+| Add an entity type | `mymem/graph/store.py` → `ENTITY_TYPES` (validated everywhere from this tuple) | |
+| Tune entity resolution thresholds | `mymem/graph/resolver.py` → `FUZZY_ACCEPT` / `FUZZY_BORDERLINE` / `COSINE_ACCEPT` | |
 
 ---
 
@@ -51,6 +53,11 @@ pipeline/
     _types.py               Interfaces: IModelRegistry, ITaskRouter, IFallbackChain, ICostTracker
     _utils.py               estimate_tokens(), fits_context(), estimate_cost()
   splitter.py               ChunkSplitter — split long docs for models with limited context
+
+graph/                      Entity layer (ADR-007) — data/graph.db
+  store.py                  entities/aliases/mentions repository + delete_page() pruning + stats()
+  extractor.py              extract_entities() — typed JSON extraction + rapidfuzz span grounding
+  resolver.py               resolve_entities() — 3-tier: exact/alias → fuzzy+cosine → batched LLM judge
   ingest.py                 ingest_source() — full pipeline: read→scan→extract→compile→index→log
   query.py                  query_wiki() — search wiki + RAG + LLM synthesis → SSE stream
   lint.py                   lint_wiki() — orphan/broken-link/stub detection (pure Python, no LLM)

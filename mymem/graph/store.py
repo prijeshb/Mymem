@@ -93,9 +93,11 @@ def _normalize(name: str) -> str:
     return " ".join(name.split())
 
 
-def _validate_type(type: str) -> None:
-    if type not in ENTITY_TYPES:
-        raise ValueError(f"Invalid entity type: {type!r}. Must be one of {ENTITY_TYPES}.")
+def _validate_type(entity_type: str) -> None:
+    if entity_type not in ENTITY_TYPES:
+        raise ValueError(
+            f"Invalid entity type: {entity_type!r}. Must be one of {ENTITY_TYPES}."
+        )
 
 
 def init_db(db_path: Path) -> None:
@@ -128,13 +130,13 @@ def upsert_entity(
     db_path: Path,
     canonical: str,
     *,
-    type: str,
+    entity_type: str,
     description: str = "",
     page_slug: str | None = None,
 ) -> Entity:
     """Insert an entity, or update the existing one with the same canonical name
     (case-insensitive). Empty description/page_slug never overwrite existing values."""
-    _validate_type(type)
+    _validate_type(entity_type)
     canonical = _normalize(canonical)
     if not canonical:
         raise ValueError("canonical name must not be blank")
@@ -147,9 +149,10 @@ def upsert_entity(
             ).fetchone()
             if existing is None:
                 cur = conn.execute(
-                    "INSERT INTO entities (canonical, type, description, page_slug, created, updated)"
+                    "INSERT INTO entities"
+                    " (canonical, type, description, page_slug, created, updated)"
                     " VALUES (?,?,?,?,?,?)",
-                    (canonical, type, description, page_slug, _now(), _now()),
+                    (canonical, entity_type, description, page_slug, _now(), _now()),
                 )
                 entity_id = int(cur.lastrowid or 0)
             else:
@@ -197,15 +200,15 @@ def find_entity(db_path: Path, name: str) -> Entity | None:
         conn.close()
 
 
-def list_entities(db_path: Path, *, type: str = "", limit: int = 500) -> list[Entity]:
-    if type:
-        _validate_type(type)
+def list_entities(db_path: Path, *, entity_type: str = "", limit: int = 500) -> list[Entity]:
+    if entity_type:
+        _validate_type(entity_type)
     conn = _connect(db_path)
     try:
-        if type:
+        if entity_type:
             rows = conn.execute(
                 "SELECT * FROM entities WHERE type = ? ORDER BY canonical LIMIT ?",
-                (type, limit),
+                (entity_type, limit),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -324,9 +327,10 @@ def delete_page(db_path: Path, page_slug: str) -> int:
                 ).fetchall()
             ]
             if orphan_ids:
+                # f-string injects only "?" placeholder marks — values stay parameterized
                 marks = ",".join("?" * len(orphan_ids))
-                conn.execute(f"DELETE FROM aliases WHERE entity_id IN ({marks})", orphan_ids)
-                conn.execute(f"DELETE FROM entities WHERE id IN ({marks})", orphan_ids)
+                conn.execute(f"DELETE FROM aliases WHERE entity_id IN ({marks})", orphan_ids)  # noqa: S608
+                conn.execute(f"DELETE FROM entities WHERE id IN ({marks})", orphan_ids)  # noqa: S608
                 log.info("Pruned orphan entities", count=len(orphan_ids), page=page_slug)
         return removed
     finally:

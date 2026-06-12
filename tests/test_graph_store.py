@@ -11,7 +11,6 @@ import pytest
 
 from mymem.graph.store import (
     ENTITY_TYPES,
-    Entity,
     GraphStats,
     add_alias,
     add_mention,
@@ -41,7 +40,7 @@ def db(tmp_path: Path) -> Path:
 
 class TestUpsertEntity:
     def test_insert_returns_entity(self, db: Path) -> None:
-        e = upsert_entity(db, "Sarah Chen", type="person", description="Platform lead")
+        e = upsert_entity(db, "Sarah Chen", entity_type="person", description="Platform lead")
         assert e.id > 0
         assert e.canonical == "Sarah Chen"
         assert e.type == "person"
@@ -50,41 +49,41 @@ class TestUpsertEntity:
 
     def test_invalid_type_raises(self, db: Path) -> None:
         with pytest.raises(ValueError, match="type"):
-            upsert_entity(db, "X", type="alien")
+            upsert_entity(db, "X", entity_type="alien")
 
     def test_empty_canonical_raises(self, db: Path) -> None:
         with pytest.raises(ValueError, match="canonical"):
-            upsert_entity(db, "   ", type="concept")
+            upsert_entity(db, "   ", entity_type="concept")
 
     def test_upsert_same_canonical_updates_not_duplicates(self, db: Path) -> None:
-        first = upsert_entity(db, "RAG", type="concept", description="old")
-        second = upsert_entity(db, "RAG", type="concept", description="newer text")
+        first = upsert_entity(db, "RAG", entity_type="concept", description="old")
+        second = upsert_entity(db, "RAG", entity_type="concept", description="newer text")
         assert first.id == second.id
         assert second.description == "newer text"
         assert stats(db).total_entities == 1
 
     def test_upsert_is_case_insensitive(self, db: Path) -> None:
-        a = upsert_entity(db, "GraphRAG", type="concept")
-        b = upsert_entity(db, "graphrag", type="concept")
+        a = upsert_entity(db, "GraphRAG", entity_type="concept")
+        b = upsert_entity(db, "graphrag", entity_type="concept")
         assert a.id == b.id
 
     def test_upsert_keeps_existing_description_when_new_is_empty(self, db: Path) -> None:
-        upsert_entity(db, "RAG", type="concept", description="kept")
-        e = upsert_entity(db, "RAG", type="concept", description="")
+        upsert_entity(db, "RAG", entity_type="concept", description="kept")
+        e = upsert_entity(db, "RAG", entity_type="concept", description="")
         assert e.description == "kept"
 
     def test_upsert_sets_page_slug_when_provided(self, db: Path) -> None:
-        upsert_entity(db, "RAG", type="concept")
-        e = upsert_entity(db, "RAG", type="concept", page_slug="rag")
+        upsert_entity(db, "RAG", entity_type="concept")
+        e = upsert_entity(db, "RAG", entity_type="concept", page_slug="rag")
         assert e.page_slug == "rag"
 
     def test_upsert_keeps_page_slug_when_not_provided(self, db: Path) -> None:
-        upsert_entity(db, "RAG", type="concept", page_slug="rag")
-        e = upsert_entity(db, "RAG", type="concept")
+        upsert_entity(db, "RAG", entity_type="concept", page_slug="rag")
+        e = upsert_entity(db, "RAG", entity_type="concept")
         assert e.page_slug == "rag"
 
     def test_canonical_whitespace_normalized(self, db: Path) -> None:
-        e = upsert_entity(db, "  Sarah   Chen  ", type="person")
+        e = upsert_entity(db, "  Sarah   Chen  ", entity_type="person")
         assert e.canonical == "Sarah Chen"
 
 
@@ -94,7 +93,7 @@ class TestUpsertEntity:
 
 class TestLookup:
     def test_get_entity_found(self, db: Path) -> None:
-        e = upsert_entity(db, "MyMem", type="project")
+        e = upsert_entity(db, "MyMem", entity_type="project")
         got = get_entity(db, e.id)
         assert got is not None and got.canonical == "MyMem"
 
@@ -102,12 +101,12 @@ class TestLookup:
         assert get_entity(db, 999) is None
 
     def test_find_by_canonical_case_insensitive(self, db: Path) -> None:
-        upsert_entity(db, "MyMem", type="project")
+        upsert_entity(db, "MyMem", entity_type="project")
         found = find_entity(db, "mymem")
         assert found is not None and found.canonical == "MyMem"
 
     def test_find_by_alias(self, db: Path) -> None:
-        e = upsert_entity(db, "Large Language Models", type="concept")
+        e = upsert_entity(db, "Large Language Models", entity_type="concept")
         add_alias(db, e.id, "LLM")
         found = find_entity(db, "llm")
         assert found is not None and found.id == e.id
@@ -116,26 +115,26 @@ class TestLookup:
         assert find_entity(db, "ghost") is None
 
     def test_entity_includes_aliases(self, db: Path) -> None:
-        e = upsert_entity(db, "Large Language Models", type="concept")
+        e = upsert_entity(db, "Large Language Models", entity_type="concept")
         add_alias(db, e.id, "LLM")
         add_alias(db, e.id, "LLMs")
         got = get_entity(db, e.id)
         assert got is not None and set(got.aliases) == {"LLM", "LLMs"}
 
     def test_list_entities_all(self, db: Path) -> None:
-        upsert_entity(db, "A", type="person")
-        upsert_entity(db, "B", type="concept")
+        upsert_entity(db, "A", entity_type="person")
+        upsert_entity(db, "B", entity_type="concept")
         assert len(list_entities(db)) == 2
 
     def test_list_entities_filter_by_type(self, db: Path) -> None:
-        upsert_entity(db, "A", type="person")
-        upsert_entity(db, "B", type="concept")
-        only = list_entities(db, type="person")
+        upsert_entity(db, "A", entity_type="person")
+        upsert_entity(db, "B", entity_type="concept")
+        only = list_entities(db, entity_type="person")
         assert [e.canonical for e in only] == ["A"]
 
     def test_list_entities_invalid_type_raises(self, db: Path) -> None:
         with pytest.raises(ValueError, match="type"):
-            list_entities(db, type="alien")
+            list_entities(db, entity_type="alien")
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +143,7 @@ class TestLookup:
 
 class TestAliases:
     def test_add_alias_idempotent(self, db: Path) -> None:
-        e = upsert_entity(db, "RAG", type="concept")
+        e = upsert_entity(db, "RAG", entity_type="concept")
         add_alias(db, e.id, "Retrieval-Augmented Generation")
         add_alias(db, e.id, "Retrieval-Augmented Generation")
         got = get_entity(db, e.id)
@@ -155,7 +154,7 @@ class TestAliases:
             add_alias(db, 999, "X")
 
     def test_blank_alias_raises(self, db: Path) -> None:
-        e = upsert_entity(db, "RAG", type="concept")
+        e = upsert_entity(db, "RAG", entity_type="concept")
         with pytest.raises(ValueError, match="alias"):
             add_alias(db, e.id, "  ")
 
@@ -166,7 +165,7 @@ class TestAliases:
 
 class TestMentions:
     def test_add_and_read_mentions_for_page(self, db: Path) -> None:
-        e = upsert_entity(db, "RAG", type="concept")
+        e = upsert_entity(db, "RAG", entity_type="concept")
         add_mention(db, e.id, "intro-to-rag", span="RAG combines retrieval", source_id="src.md")
         ms = mentions_for_page(db, "intro-to-rag")
         assert len(ms) == 1
@@ -178,15 +177,15 @@ class TestMentions:
             add_mention(db, 999, "some-page")
 
     def test_entities_for_page(self, db: Path) -> None:
-        a = upsert_entity(db, "RAG", type="concept")
-        b = upsert_entity(db, "Sarah Chen", type="person")
+        a = upsert_entity(db, "RAG", entity_type="concept")
+        b = upsert_entity(db, "Sarah Chen", entity_type="person")
         add_mention(db, a.id, "p1")
         add_mention(db, b.id, "p1")
         ents = entities_for_page(db, "p1")
         assert {e.canonical for e in ents} == {"RAG", "Sarah Chen"}
 
     def test_pages_for_entity_distinct(self, db: Path) -> None:
-        e = upsert_entity(db, "RAG", type="concept")
+        e = upsert_entity(db, "RAG", entity_type="concept")
         add_mention(db, e.id, "p1")
         add_mention(db, e.id, "p1")  # second mention, same page
         add_mention(db, e.id, "p2")
@@ -199,7 +198,7 @@ class TestMentions:
 
 class TestDeletePage:
     def test_removes_mentions(self, db: Path) -> None:
-        e = upsert_entity(db, "RAG", type="concept", page_slug="rag")
+        e = upsert_entity(db, "RAG", entity_type="concept", page_slug="rag")
         add_mention(db, e.id, "p1")
         removed = delete_page(db, "p1")
         assert removed == 1
@@ -207,13 +206,13 @@ class TestDeletePage:
 
     def test_prunes_orphan_entity(self, db: Path) -> None:
         # Entity with no page of its own and mentions only on the deleted page
-        e = upsert_entity(db, "Ephemeral", type="concept")
+        e = upsert_entity(db, "Ephemeral", entity_type="concept")
         add_mention(db, e.id, "p1")
         delete_page(db, "p1")
         assert get_entity(db, e.id) is None
 
     def test_keeps_entity_mentioned_elsewhere(self, db: Path) -> None:
-        e = upsert_entity(db, "RAG", type="concept")
+        e = upsert_entity(db, "RAG", entity_type="concept")
         add_mention(db, e.id, "p1")
         add_mention(db, e.id, "p2")
         delete_page(db, "p1")
@@ -221,19 +220,19 @@ class TestDeletePage:
 
     def test_clears_page_slug_but_keeps_entity_with_mentions(self, db: Path) -> None:
         # The deleted page IS the entity's own page; other pages still mention it
-        e = upsert_entity(db, "RAG", type="concept", page_slug="rag")
+        e = upsert_entity(db, "RAG", entity_type="concept", page_slug="rag")
         add_mention(db, e.id, "other-page")
         delete_page(db, "rag")
         got = get_entity(db, e.id)
         assert got is not None and got.page_slug is None
 
     def test_prunes_own_page_entity_with_no_other_mentions(self, db: Path) -> None:
-        e = upsert_entity(db, "RAG", type="concept", page_slug="rag")
+        e = upsert_entity(db, "RAG", entity_type="concept", page_slug="rag")
         delete_page(db, "rag")
         assert get_entity(db, e.id) is None
 
     def test_orphan_aliases_removed_with_entity(self, db: Path) -> None:
-        e = upsert_entity(db, "Ephemeral", type="concept")
+        e = upsert_entity(db, "Ephemeral", entity_type="concept")
         add_alias(db, e.id, "Eph")
         add_mention(db, e.id, "p1")
         delete_page(db, "p1")
@@ -254,9 +253,9 @@ class TestStats:
                                singleton_count=0, singleton_rate=0.0)
 
     def test_singleton_rate(self, db: Path) -> None:
-        a = upsert_entity(db, "A", type="concept")   # mentioned on 2 pages — not singleton
-        b = upsert_entity(db, "B", type="concept")   # 1 page — singleton
-        c = upsert_entity(db, "C", type="concept")   # 0 pages — singleton
+        a = upsert_entity(db, "A", entity_type="concept")   # mentioned on 2 pages — not singleton
+        b = upsert_entity(db, "B", entity_type="concept")   # 1 page — singleton
+        c = upsert_entity(db, "C", entity_type="concept")   # 0 pages — singleton
         add_mention(db, a.id, "p1")
         add_mention(db, a.id, "p2")
         add_mention(db, b.id, "p1")
@@ -284,6 +283,6 @@ def test_init_db_idempotent(tmp_path: Path) -> None:
 
 
 def test_entity_is_immutable(db: Path) -> None:
-    e = upsert_entity(db, "RAG", type="concept")
+    e = upsert_entity(db, "RAG", entity_type="concept")
     with pytest.raises(AttributeError):
         e.canonical = "changed"  # type: ignore[misc]
