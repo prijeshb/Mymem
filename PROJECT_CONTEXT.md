@@ -21,6 +21,7 @@
 | ADR-005 | Agent decomposition strategy (4 agents + 2 subagents) | Accepted |
 | ADR-006 | Extraction quality improvements | Accepted |
 | ADR-007 | Lightweight entity layer instead of full GraphRAG | Accepted |
+| ADR-008 | Graph implementation decisions (storage, resolution tiers, thresholds, hooks) | Accepted |
 
 ## Completed Features
 
