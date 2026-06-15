@@ -24,6 +24,8 @@
 | ADR-008 | Graph implementation decisions (storage, resolution tiers, thresholds, hooks) | Accepted |
 | ADR-009 | Social source readers (X syndication API + nitter fallback, Reddit .json) | Accepted |
 | ADR-010 | Free-tier provider routing (NVIDIA primary, per-task models, cross-provider rate-limit swap) | Accepted |
+| ADR-011 | Compounding ingest (atomic propositions + ADD/MERGE/SUPERSEDE/NOOP + provenance) | Proposed |
+| ADR-012 | Quota-aware free-tier routing (cooldown registry, token-bucket, multi-key, degrade-to-local) | Proposed |
 
 ## Completed Features
 
@@ -77,6 +79,20 @@
   - Tests: 36 social + 6 free-tier-chain (incl. live-validated golden token); docs/TESTING.md added
 
 ### Proposed
+- [ ] Compounding ingest (knowledge-moat core) — target branch V1-0009 — priority: P0
+  - Research: docs/research/knowledge-moat-and-free-tier-routing.md · PRD: docs/PRD/compounding-ingest.md
+  - Architecture: docs/architecture/compounding-ingest.md · ADR-011
+  - Converts ingest from overwrite-by-slug (`ingest.py:315`) to atomic propositions (with verbatim
+    source spans) → retrieve-similar → LLM ADD/MERGE/SUPERSEDE/NOOP → apply, with per-claim provenance
+    + confidence in `data/claims.db` and bi-temporal supersede (never hard-delete)
+  - Ship gates: merge-decision precision, no idea-recall regression, ingest cost < +20%
+  - Fast-follows (deferred): drift-triggered re-summarize + `lint --consolidate`; usage feedback loop;
+    KBT source-trust learning. Query-time RRF + small-to-big folds into ADR-008 Phase 3.
+- [ ] Quota-aware free-tier routing — ADR-012 — priority: P1 — independent of compounding ingest
+  - New `mymem/pipeline/router/_quota.py`: per-provider/account cooldown registry keyed off 429 +
+    `Retry-After`, predictive token-bucket from `x-ratelimit-*`, multi-key rotation, latency-EWMA,
+    degrade-to-Ollama on cost cap; pure `select_provider()` (no call-site changes); supersedes the
+    static parts of ADR-010
 - [x] Graph entity mapping Phase 1 core — PRD: docs/PRD/graph-entity-mapping.md
   - Typed entity extraction folded into ingest LLM call (person/project/system/org/concept + span)
   - 3-tier resolution: exact/alias → rapidfuzz+cosine → batched LLM judge (Graphiti pattern)
