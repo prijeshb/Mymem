@@ -22,8 +22,10 @@ from rich.table import Table
 app          = typer.Typer(name="mymem", help="Personal LLM-powered knowledge base.", add_completion=False)
 obsidian_app = typer.Typer(name="obsidian", help="Obsidian vault integration.")
 graph_app    = typer.Typer(name="graph", help="Entity graph operations (ADR-007).")
+pages_app    = typer.Typer(name="pages", help="Wiki page identity operations (ADR-013).")
 app.add_typer(obsidian_app, name="obsidian")
 app.add_typer(graph_app, name="graph")
+app.add_typer(pages_app, name="pages")
 console = Console()
 err     = Console(stderr=True, style="red")
 
@@ -378,6 +380,28 @@ def graph_backfill(
             f"[green]Tier-2 classify:[/] {creport.classified}/{creport.candidates} "
             "entities typed (aliases proposed where obvious)"
         )
+
+
+@pages_app.command("backfill-ids")
+def pages_backfill_ids() -> None:
+    """Mint a stable id for every wiki page that lacks one (ADR-013).
+
+    Idempotent and resumable — safe to re-run any time.
+    """
+    settings = _get_settings()
+    wiki_dir, *_ = _paths(settings)
+
+    from mymem.wiki.identity import backfill_page_ids
+
+    report = backfill_page_ids(wiki_dir)
+
+    table = Table(title="Page ID Backfill (ADR-013)", show_lines=False)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Count", justify="right")
+    table.add_row("Wiki pages", str(report.total_pages))
+    table.add_row("IDs minted", str(report.minted))
+    table.add_row("Already had id", str(report.already_had))
+    console.print(table)
 
 
 @graph_app.command("stats")

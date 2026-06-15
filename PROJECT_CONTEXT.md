@@ -26,7 +26,8 @@
 | ADR-010 | Free-tier provider routing (NVIDIA primary, per-task models, cross-provider rate-limit swap) | Accepted |
 | ADR-011 | Compounding ingest (atomic propositions + ADD/MERGE/SUPERSEDE/NOOP + provenance) | Proposed |
 | ADR-012 | Quota-aware free-tier routing (cooldown registry, token-bucket, multi-key, degrade-to-local) | Proposed |
-| ADR-013 | Stable page identity (opaque ULID `id` vs slug vs title; resolution + redirects) — prerequisite for ADR-011 | Proposed |
+| ADR-013 | Stable page identity (opaque ULID `id` vs slug vs title; resolution + redirects) — prerequisite for ADR-011 | Accepted |
+| ADR-014 | Page identity implementation decisions (mint_id home, auto-mint choke point, exact resolution, scope fence) | Accepted |
 
 ## Completed Features
 
@@ -69,7 +70,12 @@
 ## Planned Features
 
 ### In Progress
-- [ ] Graph entity mapping — branch V1-0007 — status: Phase 1 + 1.5 done
+- [ ] Stable page identity (ADR-013/014) — branch V1-0009 — status: Phase 0 core DONE
+  - Done: `mint_id()` (ULID) + `WikiPage.id`; `write_page` auto-mints; `read_page` loads id;
+    `mymem/wiki/identity.py` (title|slug→id index + exact `resolve_to_id` + `backfill_page_ids`);
+    `mymem pages backfill-ids` CLI. 21 new tests, identity.py 100% cov; full suite 745 green.
+  - Next in branch: re-key graph mentions slug→id (before ADR-011 claims store); then ADR-011 Phase 1.
+  - Deferred (ADR-014 D4): rename redirects; fuzzy/LLM wikilink→id resolution (lands with ADR-011).
   (store/extractor/resolver/backfill, `mymem graph backfill|stats` CLI, ingest hook,
   delete/archive cleanup); next: Phase 2 (lint unlinked mentions) + Phase 3 (retrieval RRF)
 - [ ] Social source readers + free-tier routing — branch V1-0008 — status: develop (ADR-009, ADR-010)
@@ -80,11 +86,6 @@
   - Tests: 36 social + 6 free-tier-chain (incl. live-validated golden token); docs/TESTING.md added
 
 ### Proposed
-- [ ] Stable page identity (ADR-013) — target branch V1-0009 Phase 0 — priority: P0 — **prerequisite for ADR-011**
-  - Opaque ULID `id` in page frontmatter as the rename-safe identity; slug stays filename/URL; title
-    stays display. Derived `title|alias|slug → id` index (reuses entity resolver); redirects on rename.
-  - `mymem pages backfill-ids` (idempotent/resumable, mirrors `mymem graph backfill`); re-keys graph
-    mentions + claims off `id`. Fixes the page-level entity-explosion / broken-links-on-rename problem.
 - [ ] Compounding ingest (knowledge-moat core) — target branch V1-0009 — priority: P0 — depends on ADR-013
   - Research: docs/research/knowledge-moat-and-free-tier-routing.md · PRD: docs/PRD/compounding-ingest.md
   - Architecture: docs/architecture/compounding-ingest.md · ADR-011 · claims key off stable `page_id`

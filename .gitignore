@@ -33,6 +33,8 @@ raw/
 # Wiki — personal knowledge, not versioned
 wiki/*.md
 wiki/daily/
+wiki.bak/
+wiki.bak*/
 
 # Outputs
 outputs/charts/

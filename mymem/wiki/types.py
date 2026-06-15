@@ -14,6 +14,19 @@ from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
 
+from ulid import ULID
+
+
+def mint_id() -> str:
+    """
+    Mint a new stable page identity (ADR-013).
+
+    Returns a 26-char ULID — lexicographically sortable by creation time,
+    URL-safe, and minted exactly once per page. This is the page's durable
+    primary key; the slug and title are mutable display/addressing on top of it.
+    """
+    return str(ULID())
+
 
 def slugify(text: str, max_len: int = 120) -> str:
     """
@@ -85,6 +98,10 @@ class WikiPage:
     created:  date            = field(default_factory=date.today)
     updated:  date            = field(default_factory=date.today)
     archived: bool            = False
+    # Stable identity (ADR-013). Empty on a freshly-constructed or pre-ADR-013
+    # page; write_page() mints one when absent. Never derived from the title.
+    # Named `id` to match the frontmatter key and natural `page.id` access.
+    id:       str             = ""
 
     def __post_init__(self) -> None:
         # Coerce list → tuple so the dataclass stays hashable/frozen
@@ -102,14 +119,16 @@ class WikiPage:
     def with_updated(self, **changes: object) -> "WikiPage":
         """Return a new WikiPage with fields replaced — never mutates self."""
         current = {
-            "title":   self.title,
-            "body":    self.body,
-            "path":    self.path,
-            "tags":    list(self.tags),
-            "sources": list(self.sources),
-            "domain":  self.domain,
-            "created": self.created,
-            "updated": date.today(),
+            "title":    self.title,
+            "body":     self.body,
+            "path":     self.path,
+            "tags":     list(self.tags),
+            "sources":  list(self.sources),
+            "domain":   self.domain,
+            "created":  self.created,
+            "updated":  date.today(),
+            "archived": self.archived,
+            "id":       self.id,
         }
         current.update(changes)
         return WikiPage(**current)  # type: ignore[arg-type]

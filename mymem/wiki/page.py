@@ -15,7 +15,7 @@ from pathlib import Path
 import yaml
 
 from mymem.wiki.tags import domain_from_str, normalize_tags
-from mymem.wiki.types import TagDomain, WikiPage
+from mymem.wiki.types import TagDomain, WikiPage, mint_id
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +59,8 @@ def _render_frontmatter(page: WikiPage) -> str:
         "created": page.created.isoformat(),
         "updated": page.updated.isoformat(),
     }
+    if page.id:
+        fm["id"] = page.id
     if page.archived:
         fm["archived"] = True
     fm_str = yaml.dump(fm, default_flow_style=False, allow_unicode=True, sort_keys=True)
@@ -99,17 +101,25 @@ def read_page(path: Path) -> WikiPage:
         created=_parse_date(fm.get("created")),
         updated=_parse_date(fm.get("updated")),
         archived=bool(fm.get("archived", False)),
+        id=str(fm.get("id", "")),
     )
 
 
-def write_page(page: WikiPage) -> None:
+def write_page(page: WikiPage, *, stamp_updated: bool = True) -> None:
     """
     Write a WikiPage to disk.
 
     Creates parent directories if they don't exist.
-    Always stamps `updated` to today at write time.
+    Mints a stable `id` (ADR-013) when the page does not already have one.
+
+    `stamp_updated` (default True) sets `updated` to today — the normal edit
+    behavior. Pass False for non-content writes (e.g. the id backfill migration)
+    so a page's real last-edited date is preserved.
     """
-    page = dataclasses.replace(page, updated=date.today())
+    if not page.id:
+        page = dataclasses.replace(page, id=mint_id())
+    if stamp_updated:
+        page = dataclasses.replace(page, updated=date.today())
     page.path.parent.mkdir(parents=True, exist_ok=True)
     content = _render_frontmatter(page)
     page.path.write_text(content, encoding="utf-8")

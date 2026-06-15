@@ -1,6 +1,6 @@
 # ADR 013: Stable Page Identity (id vs slug vs title)
 
-## Status: Proposed (prerequisite for ADR-011)
+## Status: Accepted — implementing in V1-0009 Phase 0 (see ADR-014 for build decisions)
 
 Context: today a single string does three jobs. `WikiPage.slug` is `slugify(self.title)`
 (`mymem/wiki/types.py:99`), and that slug is simultaneously the page's **identity** (graph
