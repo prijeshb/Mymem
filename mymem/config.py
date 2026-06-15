@@ -16,7 +16,6 @@ import yaml
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 # ---------------------------------------------------------------------------
 # Sub-models
 # ---------------------------------------------------------------------------
@@ -88,7 +87,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    provider: Literal["anthropic", "ollama", "openai", "nvidia"] = "ollama"
+    provider: Literal[
+        "anthropic", "ollama", "openai", "nvidia", "groq", "openrouter"
+    ] = "ollama"
 
     # Secrets — from .env only, never config.yaml
     anthropic_api_key: str | None = Field(default=None, alias="ANTHROPIC_API_KEY")
@@ -96,7 +97,11 @@ class Settings(BaseSettings):
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
     nvidia_api_key: str | None = Field(default=None, alias="NVIDIA_API_KEY")
-    openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
+    # Accept both the canonical name and the common OPEN_ROUTER_API_KEY misspelling.
+    openrouter_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENROUTER_API_KEY", "OPEN_ROUTER_API_KEY"),
+    )
     eval_reference_provider: Literal["groq", "gemini", "nvidia", "openrouter"] = "groq"
 
     # Sub-configs populated by load_config()
@@ -113,7 +118,7 @@ class Settings(BaseSettings):
         return v.strip() if isinstance(v, str) else v
 
     @model_validator(mode="after")
-    def _fail_closed_on_missing_secret(self) -> "Settings":
+    def _fail_closed_on_missing_secret(self) -> Settings:
         """Refuse to start if the configured provider has no API key."""
         if self.provider == "anthropic" and not self.anthropic_api_key:
             raise ValueError(
@@ -128,6 +133,16 @@ class Settings(BaseSettings):
         if self.provider == "nvidia" and not self.nvidia_api_key:
             raise ValueError(
                 "provider=nvidia but NVIDIA_API_KEY is not set. "
+                "Add it to .env or switch provider to ollama in config.yaml."
+            )
+        if self.provider == "groq" and not self.groq_api_key:
+            raise ValueError(
+                "provider=groq but GROQ_API_KEY is not set. "
+                "Add it to .env or switch provider to ollama in config.yaml."
+            )
+        if self.provider == "openrouter" and not self.openrouter_api_key:
+            raise ValueError(
+                "provider=openrouter but OPENROUTER_API_KEY is not set. "
                 "Add it to .env or switch provider to ollama in config.yaml."
             )
         return self

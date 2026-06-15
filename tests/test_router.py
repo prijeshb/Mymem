@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
-
 import pytest
 
 from mymem.pipeline.router import (
-    ModelRouter, estimate_cost, estimate_tokens, fits_context,
+    ModelRouter,
+    estimate_cost,
+    estimate_tokens,
+    fits_context,
 )
 from mymem.pipeline.splitter import ChunkSplitter, merge_prompt, merge_system_prompt
-
 
 # ---------------------------------------------------------------------------
 # Token estimation
@@ -158,6 +157,88 @@ class TestModelRouter:
         assert len(rows) == 1
         assert rows[0][0] == "qa"
         assert rows[0][1] == "gemma3:4b"
+
+
+# ---------------------------------------------------------------------------
+# FreeTierFallbackChain — cross-provider swap on rate limit
+# ---------------------------------------------------------------------------
+
+class TestFreeTierFallbackChain:
+    def _reg(self):
+        from mymem.pipeline.router._registry import DefaultModelRegistry
+        return DefaultModelRegistry()
+
+    def _chain(self, *, has_groq=True, has_openrouter=True):
+        from mymem.pipeline.router._chain import FreeTierFallbackChain
+        return FreeTierFallbackChain(has_groq=has_groq, has_openrouter=has_openrouter)
+
+    def test_preferred_is_first_and_chain_crosses_providers(self):
+        chain = self._chain().build("meta/llama-3.3-70b-instruct", self._reg(), "nvidia")
+        assert chain[0] == "meta/llama-3.3-70b-instruct"
+        reg = self._reg()
+        providers = [reg.get(m).provider for m in chain]
+        # The second attempt must be a DIFFERENT provider (groq) — a same-account
+        # NVIDIA 429 would otherwise block the whole pipeline.
+        assert providers[0] == "nvidia"
+        assert "groq" in providers
+        assert providers[1] == "groq"
+
+    def test_ollama_floor_always_last(self):
+        chain = self._chain(has_groq=False, has_openrouter=False).build(
+            "meta/llama-3.3-70b-instruct", self._reg(), "nvidia"
+        )
+        assert chain[-1] == "gemma4:31b-cloud"
+
+    def test_groq_excluded_without_key(self):
+        chain = self._chain(has_groq=False).build(
+            "meta/llama-3.3-70b-instruct", self._reg(), "nvidia"
+        )
+        reg = self._reg()
+        assert not any(reg.get(m).provider == "groq" for m in chain)
+
+    def test_openrouter_gated_on_key(self):
+        reg = self._reg()
+        pref = "meta/llama-3.3-70b-instruct"
+        with_key = self._chain(has_openrouter=True).build(pref, reg, "nvidia")
+        without = self._chain(has_openrouter=False).build(pref, reg, "nvidia")
+        assert any(reg.get(m).provider == "openrouter" for m in with_key)
+        assert not any(reg.get(m).provider == "openrouter" for m in without)
+
+    def test_preferred_not_duplicated_when_already_in_chain(self):
+        # Preferred is itself a chain member (groq small model).
+        chain = self._chain().build("llama-3.1-8b-instant", self._reg(), "groq")
+        assert chain.count("llama-3.1-8b-instant") == 1
+
+    @pytest.mark.asyncio
+    async def test_router_swaps_provider_on_rate_limit(self):
+        """A 429 on the NVIDIA model must make the router retry on Groq and succeed."""
+        from unittest.mock import patch
+
+        from mymem.pipeline.router._chain import FreeTierFallbackChain
+        from mymem.pipeline.router._credentials import KeyMapCredentials
+        from mymem.pipeline.router._registry import DefaultModelRegistry
+
+        calls: list[tuple[str, str]] = []
+
+        async def fake_complete(prompt, *, model, provider, **kwargs):
+            calls.append((model, provider))
+            if provider == "nvidia":
+                raise RuntimeError("Error code: 429 - rate limit exceeded")
+            return f"ok-from-{provider}"
+
+        router = ModelRouter(
+            task_models={"compile": "meta/llama-3.3-70b-instruct"},
+            provider="nvidia",
+            credentials=KeyMapCredentials.from_kwargs(groq="gk", nvidia="nk"),
+            fallback_chain=FreeTierFallbackChain(has_groq=True, has_openrouter=False),
+            registry=DefaultModelRegistry(),
+        )
+        with patch("mymem.pipeline.router._router.complete", new=fake_complete):
+            result = await router.call("prompt", task="compile")
+
+        assert result == "ok-from-groq"
+        assert calls[0][1] == "nvidia"   # tried NVIDIA first
+        assert calls[1][1] == "groq"     # swapped to Groq on the 429
 
 
 # ---------------------------------------------------------------------------

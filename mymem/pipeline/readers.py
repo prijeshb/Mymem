@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import re
 from abc import ABC, abstractmethod
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -205,9 +206,19 @@ class SourceReaderChain:
 
 
 def _default_readers() -> list[SourceReader]:
-    """Return the default ordered reader list."""
+    """Return the default ordered reader list.
+
+    Platform-specific readers (YouTube, Tweet, Reddit) must precede the generic
+    WebSourceReader so they claim their URLs first; the catch-all LocalFile
+    reader is always last. Social readers are imported lazily to avoid a circular
+    import (social_readers imports from this module).
+    """
+    from mymem.pipeline.social_readers import RedditSourceReader, TweetSourceReader
+
     return [
         YoutubeSourceReader(),
+        TweetSourceReader(),
+        RedditSourceReader(),
         WebSourceReader(),
         PdfSourceReader(),
         LocalFileSourceReader(),
@@ -218,7 +229,15 @@ def _default_readers() -> list[SourceReader]:
 # Module-level convenience function — backward-compatible with ingest.py
 # ---------------------------------------------------------------------------
 
-_chain = SourceReaderChain()
+@lru_cache(maxsize=1)
+def _get_chain() -> SourceReaderChain:
+    """Build the default reader chain once, lazily.
+
+    Lazy construction is required: _default_readers() imports social_readers,
+    which imports this module — building the chain at import time would deadlock
+    on a circular import. Cached because the readers are stateless.
+    """
+    return SourceReaderChain()
 
 
 async def read_source(source: str, source_type: str = "article") -> str:
@@ -226,14 +245,15 @@ async def read_source(source: str, source_type: str = "article") -> str:
     Read text from a local file path or HTTP(S) URL.
 
     Dispatches based on source_type:
-      youtube    → fetch transcript via youtube-transcript-api
-      webpage    → HTTP fetch + HTML → plain-text stripping
-      podcast    → HTTP fetch + HTML strip (RSS/show-notes page)
-      tweet      → HTTP fetch + HTML strip
-      pdf / book → pypdf text extraction (file path only)
-      *          → plain file read
+      youtube      → fetch transcript via youtube-transcript-api
+      tweet / x.com→ syndication API (full thread text), nitter fallback
+      reddit.com   → no-auth .json endpoint (post + top comments)
+      webpage      → HTTP fetch + HTML → plain-text stripping
+      podcast      → HTTP fetch + HTML strip (RSS/show-notes page)
+      pdf / book   → pypdf text extraction (file path only)
+      *            → plain file read
     """
-    return await _chain.read(source, source_type)
+    return await _get_chain().read(source, source_type)
 
 
 # ---------------------------------------------------------------------------

@@ -7,20 +7,26 @@ paths:
   outputs: outputs/
   db: data/mymem.db
 
-# LLM provider: anthropic | ollama | openai
-provider: ollama
+# LLM provider: anthropic | ollama | openai | nvidia | groq | openrouter
+# Free-tier setup: NVIDIA NIM primary (40 RPM/account). On a rate-limit the router
+# swaps cross-provider (Groq → Ollama cloud) automatically — see FreeTierFallbackChain.
+# Revert to `ollama` for fully local.
+provider: nvidia
 
-# Model per task (Ollama local models)
+# Per-task models. The provider for each is resolved from the model registry, so
+# heavy tasks run on NVIDIA while frequent light tasks (classify/lint) run on Groq —
+# spreading load across two free accounts instead of one 40 RPM bucket.
+# (Previous Ollama values: all were gemma4:31b-cloud.)
 models:
-  compile:       gemma4:31b-cloud   # raw → wiki article
-  merge:         gemma4:31b-cloud   # merge compiled chunks
-  qa:            gemma4:31b-cloud   # research Q&A
-  lint:          gemma4:31b-cloud   # health checks
-  classify:      gemma4:31b-cloud   # domain/tag classification
-  introspect:    gemma4:31b-cloud   # daily summary + recommendations
-  export_slides: gemma4:31b-cloud
-  export_charts: gemma4:31b-cloud
-  embed: nomic-embed-text           # embeddings (local Ollama, optional)
+  compile:       meta/llama-3.3-70b-instruct              # nvidia — raw → wiki article
+  merge:         nvidia/llama-3.3-nemotron-super-49b-v1   # nvidia — merge compiled chunks
+  qa:            meta/llama-3.3-70b-instruct              # nvidia — research Q&A
+  lint:          llama-3.1-8b-instant                     # groq  — fast health checks
+  classify:      llama-3.1-8b-instant                     # groq  — fast domain/tag
+  introspect:    nvidia/llama-3.3-nemotron-super-49b-v1   # nvidia — daily summary
+  export_slides: meta/llama-3.3-70b-instruct              # nvidia
+  export_charts: meta/llama-3.3-70b-instruct              # nvidia
+  embed: nomic-embed-text                                 # embeddings (always local Ollama)
 
 # Ollama settings (used when provider = ollama)
 ollama:

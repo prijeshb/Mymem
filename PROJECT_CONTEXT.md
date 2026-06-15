@@ -22,6 +22,8 @@
 | ADR-006 | Extraction quality improvements | Accepted |
 | ADR-007 | Lightweight entity layer instead of full GraphRAG | Accepted |
 | ADR-008 | Graph implementation decisions (storage, resolution tiers, thresholds, hooks) | Accepted |
+| ADR-009 | Social source readers (X syndication API + nitter fallback, Reddit .json) | Accepted |
+| ADR-010 | Free-tier provider routing (NVIDIA primary, per-task models, cross-provider rate-limit swap) | Accepted |
 
 ## Completed Features
 
@@ -67,6 +69,12 @@
 - [ ] Graph entity mapping — branch V1-0007 — status: Phase 1 + 1.5 done
   (store/extractor/resolver/backfill, `mymem graph backfill|stats` CLI, ingest hook,
   delete/archive cleanup); next: Phase 2 (lint unlinked mentions) + Phase 3 (retrieval RRF)
+- [ ] Social source readers + free-tier routing — branch V1-0008 — status: develop (ADR-009, ADR-010)
+  - `mymem/pipeline/social_readers.py`: X/Twitter via syndication API + nitter fallback,
+    Reddit via `.json`, X Article title/preview handling; fixes single-idea extraction
+  - Free-tier routing: NVIDIA primary, per-task models (heavy→NVIDIA, light→Groq),
+    cross-provider `FreeTierFallbackChain` swaps on 429; `OPEN_ROUTER_API_KEY` alias fix
+  - Tests: 36 social + 6 free-tier-chain (incl. live-validated golden token); docs/TESTING.md added
 
 ### Proposed
 - [x] Graph entity mapping Phase 1 core — PRD: docs/PRD/graph-entity-mapping.md

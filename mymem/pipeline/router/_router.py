@@ -6,13 +6,17 @@ from pathlib import Path
 from mymem.observability.logger import get_logger
 from mymem.observability.tracer import trace_llm
 from mymem.pipeline.llm import complete
-from mymem.pipeline.router._types import (
-    IFallbackChain, ICostTracker, IModelRegistry, ITaskRouter, LLMCallable,
-)
-from mymem.pipeline.router._chain import OllamaFallbackChain
+from mymem.pipeline.router._chain import FreeTierFallbackChain, OllamaFallbackChain
 from mymem.pipeline.router._cost import SessionCostTracker
 from mymem.pipeline.router._credentials import KeyMapCredentials, ProviderCredentials
 from mymem.pipeline.router._registry import DefaultModelRegistry
+from mymem.pipeline.router._types import (
+    ICostTracker,
+    IFallbackChain,
+    IModelRegistry,
+    ITaskRouter,
+    LLMCallable,
+)
 from mymem.pipeline.router._utils import estimate_tokens, fits_context
 
 log = get_logger(__name__)
@@ -188,6 +192,18 @@ def router_from_settings(settings: object, llm_fn: LLMCallable | None = None) ->
         nvidia=s.nvidia_api_key or "",
         openrouter=s.openrouter_api_key or "",
     )
+    # Free cloud providers share no per-account limit, so a 429 must swap across
+    # providers — use the cross-provider chain; otherwise keep the Ollama chain.
+    if s.provider in ("nvidia", "groq", "openrouter"):
+        fallback_chain: IFallbackChain = FreeTierFallbackChain(
+            has_groq=bool(s.groq_api_key),
+            has_openrouter=bool(s.openrouter_api_key),
+        )
+    else:
+        fallback_chain = OllamaFallbackChain(
+            anthropic_key=s.anthropic_api_key or "",
+            openai_key=s.openai_api_key or "",
+        )
     return ModelRouter(
         task_models=task_models,
         provider=s.provider,
@@ -197,4 +213,5 @@ def router_from_settings(settings: object, llm_fn: LLMCallable | None = None) ->
         cost_alert_usd=s.observability.cost_alert_usd,
         llm_fn=llm_fn,
         db_path=s.paths.db if s.observability.trace_llm_calls else None,
+        fallback_chain=fallback_chain,
     )

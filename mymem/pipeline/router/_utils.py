@@ -1,8 +1,8 @@
 """Pure utility functions for token estimation and cost calculation."""
 from __future__ import annotations
 
-from mymem.pipeline.router._types import IModelRegistry
 from mymem.pipeline.router._registry import _default_registry
+from mymem.pipeline.router._types import IModelRegistry
 
 
 def estimate_tokens(text: str) -> int:

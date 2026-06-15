@@ -89,9 +89,20 @@ async def test_ollama_chat_roundtrip() -> None:
 
 @ollama_required
 def test_configured_models_available() -> None:
+    """Every configured *Ollama-provider* model must be pulled locally.
+
+    Cloud-provider models (nvidia/groq/openrouter/anthropic) cannot be pulled
+    locally — they are validated by API key, not `ollama pull` — so this check
+    resolves each model's provider via the registry and only enforces local
+    availability for Ollama models. If the active config uses no Ollama models,
+    there is nothing to verify and the test skips.
+    """
     from mymem.config import get_settings
+    from mymem.pipeline.router._registry import DefaultModelRegistry
+
     get_settings.cache_clear()
     settings = get_settings()
+    registry = DefaultModelRegistry()
 
     r = httpx.get(f"{OLLAMA_BASE}/api/tags", timeout=5)
     pulled = {m["name"] for m in r.json().get("models", [])}
@@ -100,13 +111,31 @@ def test_configured_models_available() -> None:
         "compile":    settings.models.compile,
         "qa":         settings.models.qa,
         "lint":       settings.models.lint,
+        "merge":      settings.models.merge,
+        "classify":   settings.models.classify,
+        "introspect": settings.models.introspect,
     }
 
-    missing = {task: model for task, model in task_models.items() if model not in pulled}
+    def is_ollama_model(model: str) -> bool:
+        spec = registry.get(model)
+        if spec is not None:
+            return spec.provider == "ollama"
+        # Unknown to the registry: only treat as local when the active provider
+        # is ollama (otherwise it's a cloud model we can't pull).
+        return settings.provider == "ollama"
+
+    ollama_models = {t: m for t, m in task_models.items() if is_ollama_model(m)}
+    if not ollama_models:
+        pytest.skip(
+            f"No Ollama-provider models configured (provider={settings.provider}); "
+            "cloud models are validated by API key, not by `ollama pull`."
+        )
+
+    missing = {t: m for t, m in ollama_models.items() if m not in pulled}
     if missing:
         lines = "\n".join(f"  ollama pull {model}  # for task '{task}'"
                           for task, model in missing.items())
         pytest.fail(
-            f"These configured models are not pulled in Ollama:\n{lines}\n\n"
+            f"These configured Ollama models are not pulled:\n{lines}\n\n"
             f"Pulled models: {sorted(pulled)}"
         )

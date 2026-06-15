@@ -60,7 +60,7 @@ class KeyMapCredentials(ProviderCredentials):
         groq: str = "",
         nvidia: str = "",
         openrouter: str = "",
-    ) -> "KeyMapCredentials":
+    ) -> KeyMapCredentials:
         return cls(
             _keys={
                 "anthropic": anthropic,
