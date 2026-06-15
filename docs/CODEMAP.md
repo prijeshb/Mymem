@@ -25,6 +25,7 @@
 | Change model defaults / fallback chain | `mymem/pipeline/router/_registry.py`, `mymem/pipeline/router/_chain.py` | `DefaultModelRegistry._seed()`, `OllamaFallbackChain` |
 | Add a domain or source type constant | `frontend/src/lib/types.ts` → `ALL_DOMAINS` or `SOURCE_TYPES` | Lines 6–15 |
 | Change wiki page format / frontmatter | `mymem/wiki/types.py` → `WikiPage` dataclass | |
+| Backfill / resolve stable page ids | `mymem pages backfill-ids` → `mymem/wiki/identity.py`; `mint_id()` in `wiki/types.py` | idempotent (ADR-013); claims/graph join on `page.id` |
 | Change RAG chunking | `mymem/rag/wiki_chunker.py` (wiki), `mymem/rag/pdf_parser.py` (PDFs) | |
 | Change embedding model or dim | `mymem/rag/embedder.py` → `EMBED_MODEL`, `EMBED_DIM` | Lines 20–21 |
 | Add a new eval module | Subclass `mymem/evals/_base.py:Evaluator[T]`, register in `mymem/evals/runner.py` | |
@@ -67,8 +68,9 @@ graph/                      Entity layer (ADR-007) — data/graph.db
   introspect.py             introspect() — daily summary, research suggestions, curiosity recs
 
 wiki/
-  types.py                  WikiPage, IndexEntry, LogEntry, LogOperation, TagDomain, slugify()
-  page.py                   read_page(), write_page(), list_pages(), list_archived_pages()
+  types.py                  WikiPage (incl. stable `id`), IndexEntry, LogEntry, LogOperation, TagDomain, slugify(), mint_id()
+  identity.py               build_page_id_index() / resolve_to_id() / backfill_page_ids() — stable page id (ADR-013)
+  page.py                   read_page(), write_page(stamp_updated=), list_pages(), list_archived_pages()
   index.py                  IndexManager — load/save/upsert/remove index.md entries
   log.py                    WikiLog — append-only log.md
   tags.py                   domain_from_str(), normalize_tags()

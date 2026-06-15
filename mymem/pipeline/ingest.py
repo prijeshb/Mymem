@@ -329,11 +329,14 @@ async def ingest_source(
 
         page_body = _strip_frontmatter(page_body)
         existing_created = date.today()
+        existing_id = ""
         if is_update:
             try:
-                existing_created = read_page(page_path).created
+                existing = read_page(page_path)
+                existing_created = existing.created
+                existing_id = existing.id  # preserve stable identity across re-ingest (ADR-013)
             except Exception as exc:
-                log.debug("Could not read existing created date", page=str(page_path), error=str(exc))
+                log.debug("Could not read existing page", page=str(page_path), error=str(exc))
 
         page = WikiPage(
             title=idea_title,
@@ -343,6 +346,7 @@ async def ingest_source(
             sources=[source_name],
             domain=idea_domain,
             created=existing_created,
+            id=existing_id,
         )
         write_page(page)
         log.debug("Page written", path=str(page_path))

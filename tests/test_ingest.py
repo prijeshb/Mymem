@@ -96,6 +96,30 @@ class TestIngestSource:
         assert len(result.pages_written) > 0
 
     @pytest.mark.asyncio
+    async def test_reingest_preserves_page_id(self, tmp_path: Path):
+        # Regression (ADR-013): updating a page on re-ingest must NOT mint a new
+        # id — the page's stable identity has to survive re-compilation.
+        from mymem.wiki.page import list_pages
+
+        src = make_source_file(tmp_path)
+        wiki_dir = tmp_path / "wiki"
+        wiki_dir.mkdir()
+        kw = dict(
+            wiki_dir=wiki_dir,
+            index_path=wiki_dir / "index.md",
+            log_path=wiki_dir / "log.md",
+        )
+
+        await ingest_source(str(src), router=make_router(), **kw)
+        first = {p.title: p.id for p in list_pages(wiki_dir)}
+        assert first and all(first.values())  # every page got an id
+
+        await ingest_source(str(src), router=make_router(), **kw)  # re-ingest → update path
+        second = {p.title: p.id for p in list_pages(wiki_dir)}
+
+        assert second == first  # ids unchanged across re-ingest
+
+    @pytest.mark.asyncio
     async def test_pages_written_to_disk(self, tmp_path: Path):
         src = make_source_file(tmp_path)
         wiki_dir = tmp_path / "wiki"

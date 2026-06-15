@@ -24,7 +24,7 @@ from pathlib import Path
 from mymem.pipeline.router import ModelRouter
 from mymem.wiki.index import IndexManager
 from mymem.wiki.log import WikiLog
-from mymem.wiki.page import list_pages, slug_to_path, write_page
+from mymem.wiki.page import list_pages, read_page, slug_to_path, write_page
 from mymem.wiki.types import LogEntry, LogOperation, TagDomain, WikiPage
 
 
@@ -339,12 +339,19 @@ async def introspect(
             f"{summary}\n\n"
             f"## Reading Suggestions\n\n{rec_lines or '_No suggestions today._'}"
         )
+        existing_id = ""
+        if page_path.exists():
+            try:
+                existing_id = read_page(page_path).id  # keep id stable on same-day re-run (ADR-013)
+            except Exception:
+                existing_id = ""
         page = WikiPage(
             title=f"Daily Summary {target.isoformat()} till {till_str}",
             body=body,
             path=page_path,
             tags=["daily", "introspect"],
             domain=TagDomain.PERSONAL,
+            id=existing_id,
         )
         write_page(page)
         result.saved_to = str(page_path)

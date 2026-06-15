@@ -71,11 +71,14 @@
 
 ### In Progress
 - [ ] Stable page identity (ADR-013/014) — branch V1-0009 — status: Phase 0 core DONE
-  - Done: `mint_id()` (ULID) + `WikiPage.id`; `write_page` auto-mints; `read_page` loads id;
-    `mymem/wiki/identity.py` (title|slug→id index + exact `resolve_to_id` + `backfill_page_ids`);
-    `mymem pages backfill-ids` CLI. 21 new tests, identity.py 100% cov; full suite 745 green.
-  - Next in branch: re-key graph mentions slug→id (before ADR-011 claims store); then ADR-011 Phase 1.
-  - Deferred (ADR-014 D4): rename redirects; fuzzy/LLM wikilink→id resolution (lands with ADR-011).
+  - Done: `mint_id()` (ULID) + `WikiPage.id`; `write_page` auto-mints (+ `stamp_updated` flag);
+    `read_page` loads id; `mymem/wiki/identity.py` (title|slug→id index + exact `resolve_to_id` +
+    `backfill_page_ids`); `mymem pages backfill-ids` CLI. Live wiki migrated: 144/144 pages.
+  - Fixed: re-ingest (`ingest.py`) and daily re-run (`introspect.py`) preserve the existing id
+    instead of minting a new one — id is now stable across re-compilation. Regression test added.
+  - Tests: 23 identity/regression tests, identity.py 100% cov; full suite 747 passed / 1 skipped.
+  - Next in branch: ADR-011 Phase 1 (propositions) OR graph re-key slug→id (deferred — no rename
+    surface yet, doesn't block claims). Deferred (ADR-014 D4): rename redirects; fuzzy wikilink→id.
   (store/extractor/resolver/backfill, `mymem graph backfill|stats` CLI, ingest hook,
   delete/archive cleanup); next: Phase 2 (lint unlinked mentions) + Phase 3 (retrieval RRF)
 - [ ] Social source readers + free-tier routing — branch V1-0008 — status: develop (ADR-009, ADR-010)
