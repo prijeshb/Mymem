@@ -1,11 +1,15 @@
 # ADR 011: Compounding Ingest — Atomic Propositions, UPDATE Pipeline, Provenance
 
-## Status: Proposed (target V1-0009)
+## Status: Proposed (target V1-0009) · depends on ADR-013
 
 Context: MyMem's moat is the maintained structure over sources, which only compounds if ingest
 *mutates* existing knowledge. Today ingest overwrites by slug (`ingest.py:315`) — append-not-compound.
 This ADR records the decisions for converting ingest into a compounding loop. See
 docs/research/knowledge-moat-and-free-tier-routing.md for the survey behind each choice.
+
+**Dependency:** the MERGE/SUPERSEDE loop needs an identity that survives renames and surface-form
+drift, so claims key off the **stable page `id`** from ADR-013, *not* the mutable slug. ADR-013
+(at least migration Phases 1–2) lands first. Throughout this ADR, `page_id` means that stable id.
 
 Each section: what we chose, the alternatives, pros/cons, and when to revisit.
 
@@ -61,14 +65,17 @@ view" is `valid_to IS NULL`.
 
 ---
 
-## D4. Storage — dedicated `data/claims.db`, reuse sqlite-vec for similarity
+## D4. Storage — dedicated `data/claims.db`, keyed on stable `page_id` (ADR-013)
 
-**Chosen:** a new `claims` table (own SQLite file) for provenance + temporal fields; similarity search
-reuses the existing sqlite-vec store keyed by `page_slug`.
+**Chosen:** a new `claims` table (own SQLite file) for provenance + temporal fields. Each claim
+references its page by the **stable `page_id`** (ADR-013), not the slug, so a page rename or
+surface-form drift never orphans its provenance. Similarity search reuses the existing sqlite-vec
+store; claims link to chunks by `page_id`.
 
 | Alternative | Pros | Cons | Verdict |
 |---|---|---|---|
-| **Separate claims.db + reuse sqlite-vec** (chosen) | Clean separation; reuses embedder/store; matches `graph.db`/`rag.db` pattern | One more db file | ✅ |
+| **Separate claims.db keyed on `page_id`** (chosen) | Clean separation; reuses embedder/store; matches `graph.db`/`rag.db` pattern; rename-safe via stable id | One more db file; depends on ADR-013 landing first | ✅ |
+| Key claims on `page_slug` (mutable) | No ADR-013 dependency | Rename/merge orphans every claim — defeats the compounding loop | ❌ (the failure ADR-013 fixes) |
 | Put claims in `graph.db` | Co-located with entities | Mixes concerns; claims aren't entities | ❌ (revisit if they converge) |
 | New vector index just for claims | Tailored | Duplicates the embedding pipeline | ❌ |
 

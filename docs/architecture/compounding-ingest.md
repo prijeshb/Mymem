@@ -44,7 +44,8 @@ This closes the compounding loop so each ingestion improves the existing body in
 
 | Module | Change |
 |---|---|
-| `mymem/pipeline/ingest.py` | Replace overwrite-by-slug (`is_update = page_path.exists()`) with the decision pipeline; orchestrate retrieve → decide → apply |
+| `mymem/wiki/identity.py` *(new, ADR-013)* | `mint_id()` (ULID), the derived `title|alias|slug → id` index, and `resolve_to_id()` reusing the entity resolver. Prerequisite for the decision pipeline |
+| `mymem/pipeline/ingest.py` | Replace overwrite-by-slug (`is_update = page_path.exists()`) with: resolve title/alias → stable `page_id`, then the decision pipeline; orchestrate retrieve → decide → apply |
 | `mymem/pipeline/ingest.py` `IdeaSchema` | Add `source_span: str = ""` (back-compatible default); optional `claims: list[ClaimSchema]` |
 | `mymem/pipeline/reconcile.py` *(new, <300 lines)* | Pure decision logic: build the candidate prompt, parse ADD/MERGE/SUPERSEDE/NOOP, apply rules. `llm_fn`/`router` injected — no LLM in tests |
 | `mymem/knowledge/claims.py` *(new)* | Claims store (sqlite): create/read/supersede/delete-by-source; bi-temporal fields; `delete_source()`-style cascade |
@@ -53,10 +54,14 @@ This closes the compounding loop so each ingestion improves the existing body in
 
 ### Database schema — `data/claims.db`
 
+Claims reference their page by the **stable `page_id`** (ADR-013), never the mutable slug — a rename
+or surface-form merge must not orphan provenance. `claims.id` is the claim's own surrogate key;
+`page_id` is the page's ULID from frontmatter.
+
 ```sql
 CREATE TABLE claims (
-  id           INTEGER PRIMARY KEY,
-  page_slug    TEXT NOT NULL,
+  id           INTEGER PRIMARY KEY,      -- the claim's own id
+  page_id      TEXT NOT NULL,            -- stable page ULID (ADR-013), NOT the slug
   text         TEXT NOT NULL,            -- the atomic proposition
   source_id    TEXT NOT NULL,            -- raw/ filename or URL
   source_span  TEXT NOT NULL DEFAULT '', -- verbatim substring grounding the claim
@@ -66,12 +71,13 @@ CREATE TABLE claims (
   superseded_by INTEGER,                 -- FK claims.id; set on SUPERSEDE
   created      TEXT NOT NULL             -- ISO datetime; "transaction time"
 );
-CREATE INDEX idx_claims_slug   ON claims(page_slug);
+CREATE INDEX idx_claims_page   ON claims(page_id);
 CREATE INDEX idx_claims_source ON claims(source_id);
 CREATE INDEX idx_claims_active ON claims(valid_to) WHERE valid_to IS NULL;
 ```
 
-(Embeddings for similarity reuse the existing sqlite-vec store; claims link to chunks by `page_slug`.)
+(Embeddings for similarity reuse the existing sqlite-vec store; claims link to chunks by `page_id`.
+Renames never touch this table — only the derived title/slug→id index changes.)
 
 ## Data flow — the decision step
 

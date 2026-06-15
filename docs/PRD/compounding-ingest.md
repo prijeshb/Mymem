@@ -2,7 +2,7 @@
 
 **Status:** Proposed · **Priority:** P0 · **Target branch:** V1-0009
 **Research:** docs/research/knowledge-moat-and-free-tier-routing.md
-**ADR:** docs/ADR/011-compounding-ingest-and-provenance.md
+**ADR:** docs/ADR/011-compounding-ingest-and-provenance.md · **Depends on:** docs/ADR/013-stable-page-identity.md
 **Architecture:** docs/architecture/compounding-ingest.md
 
 ## Problem Statement
@@ -47,8 +47,12 @@ confidence/trust. The result is the append-only decay the project's own `lint` a
 
 - [ ] AC1: Extraction emits atomic propositions with a verbatim `source_span`; `IdeaSchema` extended
   (back-compatible) and validated. Span must mechanically substring/fuzzy-match the source.
-- [ ] AC2: New `data/claims.db` (or table in an existing DB) stores claims: `id, page_slug, text,
-  source_id, source_span, confidence, valid_from, valid_to, superseded_by, created`.
+- [ ] AC2: New `data/claims.db` stores claims keyed on the **stable `page_id`** (ADR-013), not the
+  slug: `id, page_id, text, source_id, source_span, confidence, valid_from, valid_to, superseded_by,
+  created`.
+- [ ] AC2a (ADR-013): every page carries a stable `id` in frontmatter; `mymem pages backfill-ids`
+  mints ids for existing pages idempotently and builds the `title|alias|slug → id` index. Ingest's
+  "is this page new?" check resolves title/alias → id instead of `page_path.exists()`.
 - [ ] AC3: Before writing a page, the pipeline retrieves top-k similar existing propositions/pages
   (sqlite-vec) and the LLM returns one decision per candidate: ADD / MERGE / SUPERSEDE / NOOP.
 - [ ] AC4: MERGE enriches the existing page body (preserves prior evidence + appends new sources);
@@ -73,6 +77,7 @@ confidence/trust. The result is the append-only decay the project's own `lint` a
 ## Timeline
 
 - Research: DONE (2026-06-15)
+- Phase 0 (ADR-013: stable page `id` in frontmatter + backfill + title→id index): ~1–2 sessions — **blocks Phase 2+**
 - Phase 1 (propositions + source spans in extraction): ~1–2 sessions
 - Phase 2 (claims store + provenance + confidence): ~2 sessions
 - Phase 3 (UPDATE decision pipeline ADD/MERGE/SUPERSEDE/NOOP): ~2–3 sessions

@@ -26,6 +26,7 @@
 | ADR-010 | Free-tier provider routing (NVIDIA primary, per-task models, cross-provider rate-limit swap) | Accepted |
 | ADR-011 | Compounding ingest (atomic propositions + ADD/MERGE/SUPERSEDE/NOOP + provenance) | Proposed |
 | ADR-012 | Quota-aware free-tier routing (cooldown registry, token-bucket, multi-key, degrade-to-local) | Proposed |
+| ADR-013 | Stable page identity (opaque ULID `id` vs slug vs title; resolution + redirects) — prerequisite for ADR-011 | Proposed |
 
 ## Completed Features
 
@@ -79,9 +80,14 @@
   - Tests: 36 social + 6 free-tier-chain (incl. live-validated golden token); docs/TESTING.md added
 
 ### Proposed
-- [ ] Compounding ingest (knowledge-moat core) — target branch V1-0009 — priority: P0
+- [ ] Stable page identity (ADR-013) — target branch V1-0009 Phase 0 — priority: P0 — **prerequisite for ADR-011**
+  - Opaque ULID `id` in page frontmatter as the rename-safe identity; slug stays filename/URL; title
+    stays display. Derived `title|alias|slug → id` index (reuses entity resolver); redirects on rename.
+  - `mymem pages backfill-ids` (idempotent/resumable, mirrors `mymem graph backfill`); re-keys graph
+    mentions + claims off `id`. Fixes the page-level entity-explosion / broken-links-on-rename problem.
+- [ ] Compounding ingest (knowledge-moat core) — target branch V1-0009 — priority: P0 — depends on ADR-013
   - Research: docs/research/knowledge-moat-and-free-tier-routing.md · PRD: docs/PRD/compounding-ingest.md
-  - Architecture: docs/architecture/compounding-ingest.md · ADR-011
+  - Architecture: docs/architecture/compounding-ingest.md · ADR-011 · claims key off stable `page_id`
   - Converts ingest from overwrite-by-slug (`ingest.py:315`) to atomic propositions (with verbatim
     source spans) → retrieve-similar → LLM ADD/MERGE/SUPERSEDE/NOOP → apply, with per-claim provenance
     + confidence in `data/claims.db` and bi-temporal supersede (never hard-delete)
