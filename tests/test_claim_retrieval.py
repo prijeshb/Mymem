@@ -1,10 +1,10 @@
 """
-Tests for mymem/knowledge/retrieval.py — find similar ACTIVE claims for a proposition
-(ADR-011 / ADR-015 Phase 3b).
+Tests for mymem/knowledge/retrieval.py — the thin adapter mapping the global claim index
+to reconcile `Candidate`s (ADR-011 / ADR-015 D19).
 
-The embedder is injected (a fake returning deterministic vectors) — no Ollama, no network.
-Candidates are scoped to the proposition's page (the compounding case: re-ingesting about
-the same concept), ranked by cosine, filtered by a similarity floor.
+The heavy lifting (KNN, active-filter, threshold) is tested in test_claim_index.py; here we
+verify retrieve_candidates delegates correctly and returns Candidates ranked best-first,
+including cross-page matches.
 """
 from __future__ import annotations
 
@@ -12,108 +12,55 @@ from pathlib import Path
 
 import pytest
 
+from mymem.knowledge.claim_index import index_claim, init_index
 from mymem.knowledge.claims import add_claim, init_db
-from mymem.knowledge.retrieval import _cosine, retrieve_candidates
-from mymem.rag.embedder import Embedder
+from mymem.knowledge.retrieval import retrieve_candidates
+from mymem.pipeline.reconcile import Candidate
 
-PAGE = "01HPAGE0000000000000000001"
-OTHER = "01HPAGE0000000000000000002"
-
-
-class FakeEmbedder(Embedder):
-    """Maps each text to a fixed vector so cosine similarity is fully controllable."""
-
-    def __init__(self, table: dict[str, list[float]]) -> None:
-        self._table = table
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        return [self._table.get(t, [0.0, 0.0, 0.0]) for t in texts]
+PAGE_A = "01HPAGE0000000000000000001"
+PAGE_B = "01HPAGE0000000000000000002"
 
 
 @pytest.fixture()
 def db(tmp_path: Path) -> Path:
     p = tmp_path / "claims.db"
     init_db(p)
+    init_index(p, dim=3)
     return p
 
 
-# ---------------------------------------------------------------------------
-# _cosine
-# ---------------------------------------------------------------------------
-
-class TestCosine:
-    def test_identical_vectors(self) -> None:
-        assert _cosine([1.0, 0.0], [1.0, 0.0]) == pytest.approx(1.0)
-
-    def test_orthogonal_vectors(self) -> None:
-        assert _cosine([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
-
-    def test_zero_vector_is_zero(self) -> None:
-        assert _cosine([0.0, 0.0], [1.0, 1.0]) == 0.0
+def _indexed_claim(
+    db: Path, page: str, text: str, vec: list[float], confidence: float = 1.0
+) -> int:
+    cid = add_claim(db, page_id=page, text=text, source_id="raw/a.md", confidence=confidence).id
+    index_claim(db, cid, vec)
+    return cid
 
 
-# ---------------------------------------------------------------------------
-# retrieve_candidates
-# ---------------------------------------------------------------------------
+class TestRetrieveCandidates:
+    def test_empty_index_returns_empty(self, db: Path) -> None:
+        assert retrieve_candidates(db, [1.0, 0.0, 0.0]) == []
 
-class TestRetrieve:
-    @pytest.mark.asyncio
-    async def test_empty_when_page_has_no_claims(self, db: Path) -> None:
-        emb = FakeEmbedder({"prop": [1.0, 0.0, 0.0]})
-        out = await retrieve_candidates(db, "prop", PAGE, embedder=emb)
-        assert out == []
+    def test_maps_hits_to_candidates(self, db: Path) -> None:
+        cid = _indexed_claim(db, PAGE_A, "a claim", [1.0, 0.0, 0.0], confidence=0.8)
+        out = retrieve_candidates(db, [1.0, 0.0, 0.0], min_similarity=0.5)
+        assert out == [Candidate(claim_id=cid, text="a claim", confidence=0.8)]
 
-    @pytest.mark.asyncio
-    async def test_ranks_by_similarity_and_applies_floor(self, db: Path) -> None:
-        near = add_claim(db, page_id=PAGE, text="near", source_id="raw/a.md")
-        far = add_claim(db, page_id=PAGE, text="far", source_id="raw/a.md")
-        emb = FakeEmbedder(
-            {
-                "prop": [1.0, 0.0, 0.0],
-                "near": [1.0, 0.0, 0.0],   # cosine 1.0  → kept
-                "far": [0.0, 1.0, 0.0],    # cosine 0.0  → below floor, dropped
-            }
-        )
-        out = await retrieve_candidates(db, "prop", PAGE, embedder=emb, min_similarity=0.5)
-        assert [c.claim_id for c in out] == [near.id]
-        assert far.id not in {c.claim_id for c in out}
+    def test_finds_cross_page_candidate(self, db: Path) -> None:
+        # Claim lives on PAGE_B; a proposition (any page) still retrieves it globally.
+        cid = _indexed_claim(db, PAGE_B, "shared concept", [1.0, 0.0, 0.0])
+        out = retrieve_candidates(db, [1.0, 0.0, 0.0], min_similarity=0.5)
+        assert [c.claim_id for c in out] == [cid]
 
-    @pytest.mark.asyncio
-    async def test_orders_most_similar_first(self, db: Path) -> None:
-        a = add_claim(db, page_id=PAGE, text="a", source_id="raw/a.md")
-        b = add_claim(db, page_id=PAGE, text="b", source_id="raw/a.md")
-        emb = FakeEmbedder(
-            {
-                "prop": [1.0, 0.0],
-                "a": [0.7, 0.7],   # cosine ~0.707
-                "b": [0.99, 0.14],  # cosine ~0.99 (more similar)
-            }
-        )
-        out = await retrieve_candidates(db, "prop", PAGE, embedder=emb, min_similarity=0.1)
-        assert [c.claim_id for c in out] == [b.id, a.id]
+    def test_orders_best_first_and_applies_floor(self, db: Path) -> None:
+        a = _indexed_claim(db, PAGE_A, "a", [0.7, 0.7, 0.0])    # ~0.707
+        b = _indexed_claim(db, PAGE_A, "b", [0.99, 0.14, 0.0])  # ~0.99
+        _indexed_claim(db, PAGE_A, "far", [0.0, 1.0, 0.0])      # ~0.0 → dropped
+        out = retrieve_candidates(db, [1.0, 0.0, 0.0], min_similarity=0.3)
+        assert [c.claim_id for c in out] == [b, a]
 
-    @pytest.mark.asyncio
-    async def test_top_k_caps_results(self, db: Path) -> None:
-        for i in range(5):
-            add_claim(db, page_id=PAGE, text=f"c{i}", source_id="raw/a.md")
-        emb = FakeEmbedder({f"c{i}": [1.0, 0.0] for i in range(5)} | {"prop": [1.0, 0.0]})
-        out = await retrieve_candidates(db, "prop", PAGE, embedder=emb, top_k=2, min_similarity=0.1)
-        assert len(out) == 2
-
-    @pytest.mark.asyncio
-    async def test_excludes_other_pages(self, db: Path) -> None:
-        add_claim(db, page_id=OTHER, text="elsewhere", source_id="raw/a.md")
-        emb = FakeEmbedder({"prop": [1.0, 0.0], "elsewhere": [1.0, 0.0]})
-        out = await retrieve_candidates(db, "prop", PAGE, embedder=emb, min_similarity=0.1)
-        assert out == []  # only the proposition's own page is in scope
-
-    @pytest.mark.asyncio
-    async def test_excludes_superseded_claims(self, db: Path) -> None:
-        from mymem.knowledge.claims import supersede_claim
-
-        new = add_claim(db, page_id=PAGE, text="new", source_id="raw/a.md")
-        old = add_claim(db, page_id=PAGE, text="old", source_id="raw/a.md")
-        supersede_claim(db, old.id, by=new.id)
-        emb = FakeEmbedder({"prop": [1.0, 0.0], "new": [1.0, 0.0], "old": [1.0, 0.0]})
-        out = await retrieve_candidates(db, "prop", PAGE, embedder=emb, min_similarity=0.1)
-        assert {c.claim_id for c in out} == {new.id}  # retired claim not a candidate
+    def test_exclude_page_id_passthrough(self, db: Path) -> None:
+        _indexed_claim(db, PAGE_A, "same", [1.0, 0.0, 0.0])
+        other = _indexed_claim(db, PAGE_B, "other", [1.0, 0.0, 0.0])
+        out = retrieve_candidates(db, [1.0, 0.0, 0.0], min_similarity=0.1, exclude_page_id=PAGE_A)
+        assert [c.claim_id for c in out] == [other]

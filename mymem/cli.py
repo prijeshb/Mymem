@@ -23,9 +23,11 @@ app          = typer.Typer(name="mymem", help="Personal LLM-powered knowledge ba
 obsidian_app = typer.Typer(name="obsidian", help="Obsidian vault integration.")
 graph_app    = typer.Typer(name="graph", help="Entity graph operations (ADR-007).")
 pages_app    = typer.Typer(name="pages", help="Wiki page identity operations (ADR-013).")
+claims_app   = typer.Typer(name="claims", help="Compounding claims ledger operations (ADR-011/015).")
 app.add_typer(obsidian_app, name="obsidian")
 app.add_typer(graph_app, name="graph")
 app.add_typer(pages_app, name="pages")
+app.add_typer(claims_app, name="claims")
 console = Console()
 err     = Console(stderr=True, style="red")
 
@@ -402,6 +404,27 @@ def pages_backfill_ids() -> None:
     table.add_row("IDs minted", str(report.minted))
     table.add_row("Already had id", str(report.already_had))
     console.print(table)
+
+
+@claims_app.command("backfill-index")
+def claims_backfill_index() -> None:
+    """Embed + index every active claim missing a vector (ADR-015 D19).
+
+    Enables cross-page MERGE/SUPERSEDE retrieval over claims written before the vector
+    index existed. Idempotent and resumable — safe to re-run any time.
+    """
+    settings = _get_settings()
+    claims_db = Path(settings.paths.db).parent / "claims.db"
+    if not claims_db.exists():
+        console.print("[dim]No claims database yet. Ingest something first.[/]")
+        return
+
+    from mymem.pipeline.compounding import backfill_claim_index
+    from mymem.rag.embedder import OllamaEmbedder
+
+    embedder = OllamaEmbedder(base_url=settings.ollama.base_url)
+    indexed = _run(backfill_claim_index(claims_db, embedder))
+    console.print(f"[green]Indexed {indexed} claim(s) into the vector index.[/]")
 
 
 @graph_app.command("stats")

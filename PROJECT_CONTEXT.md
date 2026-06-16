@@ -62,6 +62,7 @@
 | Claims-section wiki rendering + sync (P3 D13) | `mymem/knowledge/render.py`, `ingest.py` | DONE — 100% cov, ADR-015 D13-D14 |
 | Decision-agreement eval / ship gate (P3 D15) | `mymem/evals/decision_agreement.py` | DONE — 100% cov, ADR-015 D15-D16 |
 | Decision-eval live capture + background wiring (P3 D17) | `mymem/pipeline/compounding.py`, `ingest.py`, `evals/decision_agreement.py` | DONE — ADR-015 D17 |
+| Cross-page claim retrieval — global vec index (D19) | `mymem/knowledge/claim_index.py`, `retrieval.py`, `compounding.py`, `cli.py` | DONE — 100% cov, ADR-015 D19 |
 
 ## Security Status
 - **Last Audit**: 2026-06-11
@@ -129,7 +130,12 @@
     (Map/Merge/Verify + spans), `ingest_rag.py`, `ingest_claims.py`, `ingest_background.py` (graph +
     evals); `ingest.py` is now the ~480-line orchestrator re-exporting the moved names. Behavior-
     preserving (851/851 green), ADR-015 D18.
-  - Next: render body FROM claims (D11 end-state); cross-page retrieval (D8); graph re-key slug→id.
+  - Cross-page retrieval (D8/D19) DONE: global sqlite-vec claim index `knowledge/claim_index.py`
+    (cosine, in claims.db); `retrieve_candidates` now searches ALL pages (vector in, thin adapter);
+    `compounding` embeds each prop once, retrieves globally, and keeps the index in sync (index
+    ADD/SUPERSEDE, de-index superseded); `backfill_claim_index` + `mymem claims backfill-index` CLI.
+    100% cov on new modules. ADR-015 D19.
+  - Next: render body FROM claims (D11 end-state); graph re-key slug→id.
   - Research: docs/research/knowledge-moat-and-free-tier-routing.md · PRD: docs/PRD/compounding-ingest.md
   - Architecture: docs/architecture/compounding-ingest.md · ADR-011 · claims key off stable `page_id`
   - Converts ingest from overwrite-by-slug (`ingest.py:315`) to atomic propositions (with verbatim
@@ -168,4 +174,4 @@
 - Extraction consensus PASS rate on ingested articles (3 runs recorded: 2× WARN, 1× PASS)
 - Mean duplicate concept pairs per ingest (target: near 0 after dedup)
 - Wiki page coverage: ideas from full document via map-reduce (no longer limited to 6000 chars)
-- Test suite: 851 passing / 1 skipped as of 2026-06-15 (compounding ingest Phases 1-3 + wiki claims section + decision-agreement eval live on ingest)
+- Test suite: 861 passing / 1 skipped as of 2026-06-16 (compounding ingest Phases 1-3 + wiki claims section + decision-agreement eval + cross-page vector retrieval)

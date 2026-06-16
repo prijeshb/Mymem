@@ -1,63 +1,42 @@
 """
-Claim retrieval — find the similar ACTIVE claims a proposition should be reconciled
-against (ADR-011 / ADR-015 Phase 3b).
+Claim retrieval — find the similar ACTIVE claims a proposition should be reconciled against
+(ADR-011 / ADR-015 D19, cross-page).
 
-Candidates are scoped to the proposition's own page (its stable ULID): re-ingesting a
-concept resolves to the same page_id (ADR-013), so its existing claims are exactly the
-ones a MERGE / SUPERSEDE / NOOP would act on. The embedder is injected (Strategy, ADR-006)
-so this is fully testable without Ollama. Ranking is in-Python cosine — cheap because the
-candidate set is bounded by one page's claims; a sqlite-vec claim index is deferred until
-claim counts make that necessary (ADR-015 D8).
+Thin adapter over the global `claim_index`: it takes the proposition's already-computed
+embedding (the embedder lives in the compounding layer) and returns reconcile `Candidate`s,
+ranked by cosine similarity across ALL pages — so MERGE / SUPERSEDE can act on a contradicting
+or duplicate claim wherever it lives, not just on the proposition's own page.
 """
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
-from mymem.knowledge.claims import claims_for_page
+from mymem.knowledge.claim_index import search
 from mymem.pipeline.reconcile import Candidate
-from mymem.rag.embedder import Embedder
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    """Cosine similarity; 0.0 when either vector has zero magnitude."""
-    dot = sum(x * y for x, y in zip(a, b, strict=False))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    if na == 0.0 or nb == 0.0:
-        return 0.0
-    return dot / (na * nb)
-
-
-async def retrieve_candidates(
+def retrieve_candidates(
     db_path: Path,
-    prop_text: str,
-    page_id: str,
+    query_embedding: list[float],
     *,
-    embedder: Embedder,
     top_k: int = 5,
     min_similarity: float = 0.6,
+    exclude_page_id: str | None = None,
 ) -> list[Candidate]:
-    """Return the page's active claims most similar to `prop_text`, best first.
+    """Return the active claims most similar to `query_embedding`, best first.
 
-    Empty when the page has no active claims (e.g. a brand-new page) — the caller then
-    falls through to ADD without an LLM round-trip.
+    Empty when nothing clears `min_similarity` (or the index is empty) — the caller then
+    falls through to ADD without an LLM round-trip. `exclude_page_id` is unused by default;
+    same-page claims are valid candidates (re-ingesting a concept should MERGE/NOOP onto them).
     """
-    actives = claims_for_page(db_path, page_id, active_only=True)
-    if not actives:
-        return []
-
-    vectors = await embedder.embed([prop_text] + [c.text for c in actives])
-    query_vec = vectors[0]
-
-    scored = [
-        (_cosine(query_vec, vec), claim)
-        for claim, vec in zip(actives, vectors[1:], strict=True)
-    ]
-    scored = [pair for pair in scored if pair[0] >= min_similarity]
-    scored.sort(key=lambda pair: pair[0], reverse=True)
-
+    hits = search(
+        db_path,
+        query_embedding,
+        top_k=top_k,
+        min_similarity=min_similarity,
+        exclude_page_id=exclude_page_id,
+    )
     return [
-        Candidate(claim_id=claim.id, text=claim.text, confidence=claim.confidence)
-        for _, claim in scored[:top_k]
+        Candidate(claim_id=h.claim_id, text=h.text, confidence=h.confidence)
+        for h in hits
     ]

@@ -15,7 +15,8 @@
 | Change the LLM extraction prompt | `mymem/pipeline/ingest_extract.py` → `_EXTRACT_SYSTEM` (canonical) or `_EXTRACT_SYSTEM_TMPL` (legacy w/ max_concepts) | — |
 | Change Map/Merge/Verify extraction | `mymem/pipeline/ingest_extract.py` → `_extract_chunk_ideas`/`_merge_ideas`/`_verify_ideas`/`_extract_ideas_map_reduce` | spans grounded in `_ground_span` |
 | Change ADD/MERGE/SUPERSEDE/NOOP decision | `mymem/pipeline/reconcile.py` → `build_decision_prompt`/`parse_decision`/`apply_decision` | parse degrades to safe ADD |
-| Change claim retrieval (candidates) | `mymem/knowledge/retrieval.py` → `retrieve_candidates()` | same-page active claims, cosine |
+| Change claim retrieval (candidates) | `mymem/knowledge/retrieval.py` → `retrieve_candidates()` (global, vector in) | searches `claim_index` cross-page |
+| Change the claim vector index | `mymem/knowledge/claim_index.py` → `init_index`/`index_claim`/`search` (sqlite-vec, cosine) | in claims.db; `mymem claims backfill-index` |
 | Change the claims store schema/ops | `mymem/knowledge/claims.py` (`data/claims.db`) | bi-temporal; `page_id` key (ADR-013) |
 | Change the wiki "Knowledge Claims" section | `mymem/knowledge/render.py` → `render_claims_section`/`sync_claims_section` | marker-delimited, idempotent |
 | Change compounding persistence on ingest | `mymem/pipeline/ingest_claims.py` → `_persist_claims` (+ `_sync_claims_sections`) | naive fallback if embedder down |
@@ -71,14 +72,15 @@ pipeline/
   ingest_claims.py          _persist_claims (compounding) + _sync_claims_sections + _build_claim_embedder
   ingest_background.py      _graph_extract_background + _eval_*_background + _build_reference_llm (fire-and-forget)
   reconcile.py              ADD/MERGE/SUPERSEDE/NOOP decision core (ADR-011 P3): prompt/parse/apply_decision
-  compounding.py            reconcile_source_claims() — retrieve→decide→apply orchestrator → AppliedDecision
+  compounding.py            reconcile_source_claims() — embed→retrieve→decide→apply + maintains claim_index; backfill_claim_index()
   query.py                  query_wiki() — search wiki + RAG + LLM synthesis → SSE stream
   lint.py                   lint_wiki() — orphan/broken-link/stub detection (pure Python, no LLM)
   introspect.py             introspect() — daily summary, research suggestions, curiosity recs
 
 knowledge/                  Compounding ledger (ADR-011/015) — data/claims.db
   claims.py                 bi-temporal claims store: add/get/supersede/corroborate/replace_source_claims
-  retrieval.py              retrieve_candidates() — same-page active claims by embedding cosine
+  claim_index.py            sqlite-vec cosine index over claims (global cross-page retrieval, D19)
+  retrieval.py              retrieve_candidates() — global active claims via claim_index (vector in)
   render.py                 render_claims_section()/sync_claims_section() — "Knowledge Claims" wiki markdown
 
 graph/                      Entity layer (ADR-007) — data/graph.db

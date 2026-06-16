@@ -271,12 +271,25 @@ _IDEAS = [
 _CAND_ID_RE = re.compile(r"^\s*(\d+):", re.MULTILINE)
 
 
+# Deterministic per-text 768-dim vectors: identical text → identical (cosine 1.0),
+# distinct text → orthogonal (cosine 0.0). Mirrors reality (distinct concepts ≠ candidates;
+# re-ingesting the same concept retrieves its prior claim), unlike an all-identical stub.
+_SLOT: dict[str, int] = {}
+
+
+def _vec_for(text: str) -> list[float]:
+    if text not in _SLOT:
+        _SLOT[text] = len(_SLOT) % 768
+    v = [0.0] * 768
+    v[_SLOT[text]] = 1.0
+    return v
+
+
 class _StubEmbedder:
-    """All texts → the same unit vector, so any existing claim is a retrieval candidate
-    (cosine 1.0). Lets the re-ingest path reach the decision LLM deterministically."""
+    """768-dim one-hot per unique text — no Ollama, deterministic, collision-free."""
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        return [[1.0, 0.0] for _ in texts]
+        return [_vec_for(t) for t in texts]
 
 
 def _ingest_router() -> object:

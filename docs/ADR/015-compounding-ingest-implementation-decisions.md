@@ -312,3 +312,40 @@ relocated with their code).
 
 **Revisit when:** `ingest_source` itself grows past ~300 lines → extract the per-idea
 compile loop into a `_compile_page` helper.
+
+---
+
+## D8 realized — Cross-page claim retrieval (global vector index)
+
+### D19. Global sqlite-vec claim index; embedder in compounding, not retrieval
+
+**Chosen:** add a `claim_vec` sqlite-vec table (cosine metric) inside claims.db
+(`knowledge/claim_index.py`). Retrieval (`retrieve_candidates`) is now a thin adapter that
+takes a **precomputed query vector** and searches the index *globally* (all pages), returning
+reconcile `Candidate`s. The embedder moved up into `compounding.reconcile_source_claims`,
+which embeds each proposition once, retrieves, decides, applies, and keeps the index in sync
+(index new ADD/SUPERSEDE claims; de-index superseded ones). A `backfill_claim_index` +
+`mymem claims backfill-index` CLI vectorizes pre-D19 claims.
+
+This realizes the trigger deferred in **D8** (same-page retrieval) and **D4** ("add a vec
+table only if claim-level vectors prove necessary").
+
+| Alternative | Pros | Cons | Verdict |
+|---|---|---|---|
+| **Global sqlite-vec claim index, embed in compounding** (chosen) | Catches MERGE/SUPERSEDE across pages, not just within one; O(log n) KNN vs re-embedding the corpus per prop; retrieval becomes pure/trivially testable (vector in); reuses the sqlite-vec dep | Must keep the index in sync on add/supersede; needs a backfill for old claims | ✅ |
+| Keep same-page in-Python cosine (D8 original) | No index to maintain | Cross-page dups/contradictions are never caught — always ADD; re-embeds same-page claims every prop | ❌ Superseded |
+| Re-embed all active claims per proposition | No persistent index | O(all claims) embeddings per prop — the cost D4 warned about | ❌ |
+
+**Sub-decisions:**
+- **Cosine metric** (`distance_metric=cosine`) so `similarity = 1 - distance` maps directly
+  to the existing `min_similarity` threshold (verified: identical→0, orthogonal→1).
+- **Active-filter in Python** after an over-fetched KNN (mirrors `rag/store.py`), since vec0
+  can't push the `valid_to IS NULL` join filter into the MATCH query.
+- **Index lives in claims.db** (one file, joined to `claims`), accessed by a vec-loading
+  connection; `claims.py`'s plain connections never touch the virtual table.
+- **De-index on SUPERSEDE** keeps the index lean; correctness doesn't depend on it (the
+  active-filter already excludes superseded claims) — `delete_source` vec cleanup is deferred.
+
+**Revisit when:** claim count makes per-prop embedding the bottleneck → batch-embed a source's
+propositions up-front (loses intra-batch indexing) or precompute on write; or when
+`delete_source` leaves enough dead vectors to hurt recall → add vec cleanup there.
