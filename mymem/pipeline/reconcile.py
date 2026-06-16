@@ -62,7 +62,7 @@ class ReconcileResult:
     reason: str = ""
 
 
-_RECONCILE_SYSTEM = (
+RECONCILE_SYSTEM = (
     "You reconcile a new proposition against existing knowledge claims. "
     "Choose exactly one action and reply with ONLY a JSON object: "
     '{"decision": "ADD|MERGE|SUPERSEDE|NOOP", "target_claim_id": <id or null>, '
@@ -159,7 +159,7 @@ async def reconcile(
         return ReconcileResult(Decision.ADD, reason="no existing claims")
     prompt = build_decision_prompt(prop, candidates)
     raw = await router.call(
-        prompt, task="reconcile", system=_RECONCILE_SYSTEM, max_tokens=max_tokens
+        prompt, task="reconcile", system=RECONCILE_SYSTEM, max_tokens=max_tokens
     )
     result = parse_decision(raw, candidates)
     log.info(

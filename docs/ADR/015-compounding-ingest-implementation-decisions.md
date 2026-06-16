@@ -225,3 +225,41 @@ It no-ops when `claims.db` is absent and never raises into ingest.
 
 **Revisit when:** touched-page counts get large enough that the extra write matters → batch
 the section sync, or fold it into the compile-write once claims precede page writes.
+
+---
+
+## Phase 3 (cont.) — Decision-agreement eval (ship gate)
+
+### D15. Judge reuses reconcile's prompt/parse; only the model differs
+
+**Chosen:** `evals/decision_agreement.py` re-judges each pipeline decision with a held-out
+LLM, reusing `reconcile.build_decision_prompt`, `RECONCILE_SYSTEM`, and `parse_decision`
+(promoted from private). Agreement = decision *label* match; target agreement is tracked
+separately for agreed non-ADD decisions. LLM injected, mirrors `extraction_consensus.py`.
+
+| Alternative | Pros | Cons | Verdict |
+|---|---|---|---|
+| **Reuse reconcile prompt/parse, swap model** (chosen) | The judge runs the *exact* task the pipeline ran, so disagreement reflects model judgement not prompt drift; DRY; parse degrades to ADD like production | Couples the eval to reconcile's prompt (intended) | ✅ |
+| Bespoke judge prompt | Judge phrased independently | Prompt drift confounds the metric; duplicate parsing logic | ❌ |
+| Compare against a hand-labeled gold set | No judge cost | No gold set exists; doesn't scale with a growing wiki (cf. retrieval-eval feedback) | ❌ Defer |
+
+**Revisit when:** a curated gold set of decisions exists → add it as a second eval mode
+alongside the judge.
+
+### D16. Label-agreement thresholds PASS≥0.80 / WARN≥0.60; empty→WARN; live capture deferred
+
+**Chosen:** grade on label-agreement rate — PASS ≥ 0.80, WARN ≥ 0.60, else FAIL; zero
+cases grades WARN (nothing to certify, never a false PASS). The eval scores supplied
+`DecisionCase`s; capturing real cases from live ingest (recording the candidates each
+decision saw) is a follow-up so this slice stays a pure, 100%-tested metric.
+
+| Alternative | Pros | Cons | Verdict |
+|---|---|---|---|
+| **0.80/0.60, empty→WARN, capture later** (chosen) | Conventional agreement bands; empty can't masquerade as a pass; ships the metric now without touching the hot path's return types | Not yet wired to auto-run on real ingests | ✅ |
+| Wire live capture now | End-to-end immediately | Changes `reconcile_source_claims` return + background-eval plumbing — a bigger, riskier slice | ❌ Defer |
+| Single 0.5 cutoff | Simpler | No "needs-attention" middle band; binary gate hides borderline drift | ❌ |
+
+**Revisit when:** wiring live capture — extend `reconcile_source_claims` to surface the
+candidates per decision, build `DecisionCase`s in the background eval (next to
+extraction-consensus), and persist results to `data/evals.db` for the suite grid. Tune
+PASS/WARN once real agreement numbers exist (PRD leaves target% open).
