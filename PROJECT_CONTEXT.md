@@ -8,7 +8,7 @@
 - Testing: pytest + pytest-asyncio + pytest-cov (≥ 80% required)
 
 ## Current Branch
-- `V1-0006` — active development
+- `V1-0010` — compounding ingest (ADR-011) + graph re-key. master is at the full project + README.
 
 ## Architecture Decisions
 
@@ -28,6 +28,7 @@
 | ADR-012 | Quota-aware free-tier routing (cooldown registry, token-bucket, multi-key, degrade-to-local) | Proposed |
 | ADR-013 | Stable page identity (opaque ULID `id` vs slug vs title; resolution + redirects) — prerequisite for ADR-011 | Accepted |
 | ADR-014 | Page identity implementation decisions (mint_id home, auto-mint choke point, exact resolution, scope fence) | Accepted |
+| ADR-015 | Compounding ingest implementation decisions (Phase 1: span grounding substring+fuzzy, blank-not-drop, persist in Phase 2) | Accepted |
 
 ## Completed Features
 
@@ -53,6 +54,11 @@
 | Eval suite summary grid (cards, staleness, never-run states) | `frontend/src/components/EvalSuiteGrid.tsx` | DONE |
 | Eval run trigger (POST /api/evals/run + UI button, RAGAS flag) | `mymem/web/routes/api.py`, `EvalsPage.tsx` | DONE |
 | Grades for wiki_quality + chunking summaries | `mymem/evals/ingest_quality.py`, `chunking.py` | DONE |
+| Verbatim source spans + grounding (compounding ingest P1) | `mymem/pipeline/ingest.py` | DONE — ADR-015 D1-D3 |
+| Bi-temporal claims store (compounding ingest P2) | `mymem/knowledge/claims.py` (`data/claims.db`) | DONE — 100% cov, ADR-015 D4-D7 |
+| Reconcile decision core (compounding ingest P3a) | `mymem/pipeline/reconcile.py` | DONE — 100% cov, ADR-015 D8-D12 |
+| Claim retrieval (compounding ingest P3b) | `mymem/knowledge/retrieval.py` | DONE — 100% cov |
+| Retrieve→decide→apply orchestrator + ingest wiring (P3c) | `mymem/pipeline/compounding.py`, `ingest.py` | DONE — 100% cov |
 
 ## Security Status
 - **Last Audit**: 2026-06-11
@@ -89,7 +95,24 @@
   - Tests: 36 social + 6 free-tier-chain (incl. live-validated golden token); docs/TESTING.md added
 
 ### Proposed
-- [ ] Compounding ingest (knowledge-moat core) — target branch V1-0009 — priority: P0 — depends on ADR-013
+- [ ] Compounding ingest (knowledge-moat core) — branch V1-0010 — priority: P0 — Phases 1-3 DONE
+  - Phase 1 DONE: extraction emits a verbatim `source_span` per idea, mechanically grounded
+    against the source (`_ground_span` substring+rapidfuzz≥90, blank-not-drop); `IdeaSchema.source_span`;
+    10 tests (test_propositions.py). ADR-015 D1-D3.
+  - Phase 2 DONE: bi-temporal claims store `mymem/knowledge/claims.py` → `data/claims.db`
+    (claims keyed on stable page ULID per ADR-013, verbatim provenance, confidence,
+    valid_from/valid_to/superseded_by; supersede never hard-deletes). 100% cov.
+    `_merge_ideas` recovers the best-grounded span the merge LLM drops (`_preserve_spans`).
+    ADR-015 D4-D7.
+  - Phase 3 DONE (built in parts): `pipeline/reconcile.py` (ADD/MERGE/SUPERSEDE/NOOP decision
+    core, parse→ADD safe-default, 100% cov) → `knowledge/retrieval.py` (same-page active-claim
+    retrieval, injected embedder, in-Python cosine, 100% cov) → `pipeline/compounding.py`
+    (retrieve→decide→apply orchestrator, 100% cov). Ingest's `_persist_claims` now compounds
+    per proposition with a naive-replace fallback when the embedder is down; `reconcile` task
+    added to the router. ADR-015 D8-D12.
+  - Next: render page body FROM active claims so MERGE/SUPERSEDE show in the wiki (ADR-015 D11);
+    decision-agreement eval + ship gates (PRD §Success Metrics); cross-page retrieval (D8);
+    graph re-key slug→id.
   - Research: docs/research/knowledge-moat-and-free-tier-routing.md · PRD: docs/PRD/compounding-ingest.md
   - Architecture: docs/architecture/compounding-ingest.md · ADR-011 · claims key off stable `page_id`
   - Converts ingest from overwrite-by-slug (`ingest.py:315`) to atomic propositions (with verbatim
@@ -128,4 +151,4 @@
 - Extraction consensus PASS rate on ingested articles (3 runs recorded: 2× WARN, 1× PASS)
 - Mean duplicate concept pairs per ingest (target: near 0 after dedup)
 - Wiki page coverage: ideas from full document via map-reduce (no longer limited to 6000 chars)
-- Test suite: 684 tests passing as of 2026-06-12
+- Test suite: 825 passing / 1 skipped as of 2026-06-15 (compounding ingest Phases 1-3 complete)

@@ -28,6 +28,7 @@ _CLOUD_DEFAULTS: dict[str, str] = {
     "introspect": "gemma4:31b-cloud",
     "lint":       "gemma4:31b-cloud",
     "classify":   "gemma4:31b-cloud",
+    "reconcile":  "gemma4:31b-cloud",  # ADD/MERGE/SUPERSEDE/NOOP decision (ADR-011 Phase 3)
     "embed":      "nomic-embed-text",
 }
 

@@ -20,7 +20,10 @@ import textwrap
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Callable, Awaitable
+from typing import TYPE_CHECKING, Callable, Awaitable
+
+if TYPE_CHECKING:
+    from mymem.rag.embedder import Embedder
 
 from pydantic import BaseModel, Field as PydanticField, ValidationError
 
@@ -51,7 +54,14 @@ from mymem.wiki.index import IndexManager
 from mymem.wiki.log import WikiLog
 from mymem.wiki.page import read_page, slug_to_path, write_page
 from mymem.wiki.tags import domain_from_str, normalize_tags
-from mymem.wiki.types import IndexEntry, LogEntry, LogOperation, TagDomain, WikiPage
+from mymem.wiki.types import (
+    IndexEntry,
+    LogEntry,
+    LogOperation,
+    TagDomain,
+    WikiPage,
+    mint_id,
+)
 
 log = get_logger(__name__)
 
@@ -87,6 +97,9 @@ class IdeaSchema(BaseModel):
     main_thesis: bool = False
     tags: list[str] = PydanticField(default_factory=list)
     domain: str = "misc"
+    # Verbatim quote from the source grounding this idea (ADR-011 D2). Blanked by
+    # _ground_idea_spans when not actually found in the source (anti-hallucination).
+    source_span: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +117,7 @@ Return only valid JSON array:
     "summary": "2-3 sentence explanation grounded only in the source",
     "why_it_matters": "Why this is worth preserving in a personal wiki",
     "evidence": ["short source-grounded quote or paraphrase"],
+    "source_span": "a short quote copied VERBATIM (exact characters) from the source that grounds this idea",
     "chunk_id": 0,
     "importance": 3,
     "main_thesis": false,
@@ -114,6 +128,7 @@ Return only valid JSON array:
 
 Rules:
 - Do not infer facts not present in the source.
+- "source_span" MUST be copied verbatim (exact substring) from the source, never paraphrased.
 - Prefer distinct concepts over overlapping variants.
 - Include both central thesis and non-obvious supporting ideas.
 - Do not include generic background knowledge unless the source uses it as a key idea.
@@ -298,6 +313,9 @@ async def ingest_source(
     result     = IngestResult(source_path=source)
     inferred_domain = domain_from_str(domain) if domain else TagDomain.MISC
     extra_tags = normalize_tags(tags or [])
+    # Atomic propositions persisted to claims.db after the loop (ADR-015 Phase 2),
+    # keyed on each page's stable id so a later rename never orphans provenance.
+    claim_records: list[tuple[str, str, str]] = []  # (page_id, text, source_span)
 
     for idx, idea in enumerate(selected_ideas, 1):
         idea_title   = str(idea.get("title", "Untitled"))
@@ -338,6 +356,9 @@ async def ingest_source(
             except Exception as exc:
                 log.debug("Could not read existing page", page=str(page_path), error=str(exc))
 
+        # Resolve the stable id up-front so claims can be keyed on it (write_page would
+        # otherwise mint it internally, leaving it out of reach here).
+        page_id = existing_id or mint_id()
         page = WikiPage(
             title=idea_title,
             body=page_body,
@@ -346,9 +367,15 @@ async def ingest_source(
             sources=[source_name],
             domain=idea_domain,
             created=existing_created,
-            id=existing_id,
+            id=page_id,
         )
         write_page(page)
+
+        claim_text = (idea_summary or idea_title).strip()
+        if claim_text:
+            claim_records.append(
+                (page_id, claim_text, str(idea.get("source_span", "")).strip())
+            )
         log.debug("Page written", path=str(page_path))
 
         # Async best-effort wiki RAG indexing (fire-and-forget; never blocks ingest)
@@ -370,6 +397,11 @@ async def ingest_source(
             result.pages_updated.append(idea_title)
         else:
             result.pages_written.append(idea_title)
+
+    # 4b. Compound atomic propositions into claims.db (ADR-015 Phase 3c). Best-effort:
+    # knowledge recording must never fail an ingest.
+    if db_path:
+        await _persist_claims(db_path, source_name, claim_records, router=router)
 
     # 5. Log the ingest operation
     all_touched = result.pages_written + result.pages_updated
@@ -702,6 +734,129 @@ def _parse_and_validate_ideas(
     return validated
 
 
+def _ground_span(span: str, source: str, *, min_ratio: float = 90.0) -> str:
+    """
+    Return *span* if it is grounded in *source* (verbatim or near-verbatim), else "".
+
+    Mechanical anti-hallucination check (ADR-011 D2). A whitespace/case-normalized
+    substring match accepts exact and lightly-reformatted quotes; rapidfuzz
+    partial_ratio then catches minor OCR/transcription drift. An ungrounded span is
+    dropped (blanked) — the idea itself is kept, so recall never regresses.
+    """
+    span = span.strip()
+    if not span:
+        return ""
+    norm_span = " ".join(span.split()).lower()
+    norm_source = " ".join(source.split()).lower()
+    if norm_span in norm_source:
+        return span
+    from rapidfuzz import fuzz
+    if fuzz.partial_ratio(norm_span, norm_source) >= min_ratio:
+        return span
+    return ""
+
+
+def _ground_idea_spans(
+    ideas: list[dict[str, object]], source: str
+) -> list[dict[str, object]]:
+    """Return new idea dicts with each `source_span` validated against *source*."""
+    return [
+        {**idea, "source_span": _ground_span(str(idea.get("source_span", "")), source)}
+        for idea in ideas
+    ]
+
+
+def _preserve_spans(
+    merged: list[dict[str, object]], candidates: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    """Refill `source_span` the merge LLM dropped, from the pre-merge candidates (ADR-015 D3).
+
+    The map stage already grounded each candidate's span against its chunk; the merge LLM
+    often omits it. For each merged idea missing a span, copy the first *grounded* span from
+    a candidate with the same title (case-insensitive). Existing merged spans are kept.
+    Immutable — returns new dicts.
+    """
+    by_title: dict[str, str] = {}
+    for cand in candidates:
+        title = str(cand.get("title", "")).strip().lower()
+        span = str(cand.get("source_span", "")).strip()
+        if title and span and title not in by_title:
+            by_title[title] = span
+
+    out: list[dict[str, object]] = []
+    for idea in merged:
+        if str(idea.get("source_span", "")).strip():
+            out.append({**idea})
+            continue
+        recovered = by_title.get(str(idea.get("title", "")).strip().lower(), "")
+        out.append({**idea, "source_span": recovered})
+    return out
+
+
+def _build_claim_embedder() -> "Embedder":
+    """Construct the embedder used for claim retrieval. Isolated so tests can patch it."""
+    from mymem.rag.embedder import OllamaEmbedder
+
+    return OllamaEmbedder()
+
+
+def _naive_persist(claims_db: Path, source_id: str, records: list[tuple[str, str, str]]) -> None:
+    """Fallback when the compounding pipeline is unavailable (e.g. no embedder): record
+    provenance with an idempotent per-source replace so re-ingest can't duplicate."""
+    from mymem.knowledge.claims import NewClaim, replace_source_claims
+
+    replace_source_claims(
+        claims_db,
+        source_id,
+        [NewClaim(page_id=pid, text=text, source_span=span) for pid, text, span in records],
+    )
+
+
+async def _persist_claims(
+    db_path: Path,
+    source_id: str,
+    records: list[tuple[str, str, str]],
+    *,
+    router: "ModelRouter",
+) -> None:
+    """Compound this source's propositions into claims.db (ADR-015 Phase 3c).
+
+    For each proposition: retrieve similar active claims on its page → LLM decides
+    ADD/MERGE/SUPERSEDE/NOOP → apply to the bi-temporal ledger. If retrieval/decision is
+    unavailable (embedder down), fall back to idempotent naive provenance. Never raises —
+    knowledge recording must not break an ingest.
+    """
+    if not records:
+        return
+    from mymem.knowledge.claims import init_db
+    from mymem.pipeline.compounding import reconcile_source_claims
+    from mymem.pipeline.reconcile import Proposition
+
+    claims_db = db_path.parent / "claims.db"
+    try:
+        init_db(claims_db)
+        propositions = [
+            Proposition(text=text, page_id=pid, source_span=span)
+            for pid, text, span in records
+        ]
+        await reconcile_source_claims(
+            claims_db, source_id, propositions,
+            router=router, embedder=_build_claim_embedder(),
+        )
+        log.info("Claims compounded", source=source_id, propositions=len(propositions))
+    except Exception as exc:
+        log.warning(
+            "Claims compounding failed; falling back to naive persist",
+            source=source_id, error=str(exc),
+        )
+        try:
+            _naive_persist(claims_db, source_id, records)
+        except Exception as exc2:
+            log.warning(
+                "Claims persistence failed (non-fatal)", source=source_id, error=str(exc2)
+            )
+
+
 async def _extract_chunk_ideas(
     chunk: str,
     chunk_id: int,
@@ -719,6 +874,7 @@ async def _extract_chunk_ideas(
     )
     raw = await router.call(prompt, task="compile", system=_EXTRACT_SYSTEM)
     ideas = _parse_and_validate_ideas(raw, chunk_id=chunk_id)
+    ideas = _ground_idea_spans(ideas, chunk)  # drop hallucinated spans (ADR-011 D2)
     log.info("Chunk extracted", chunk_id=chunk_id, ideas=len(ideas))
     return ideas
 
@@ -779,6 +935,8 @@ async def _merge_ideas(
         # Fallback: return ranked candidates without the recurrence_count field
         merged = [{k: v for k, v in c.items() if k != "recurrence_count"} for c in candidates[:10]]
         merged = _parse_and_validate_ideas(_json.dumps(merged))
+    # The merge LLM frequently drops source_span; recover it from the grounded candidates.
+    merged = _preserve_spans(merged, candidates)
     log.info("Merge complete", input=len(all_ideas), output=len(merged))
     return merged
 
