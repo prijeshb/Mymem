@@ -182,20 +182,19 @@ class TestBackgroundWiring:
     @pytest.mark.asyncio
     async def test_persists_decision_agreement_run(self, tmp_path, monkeypatch) -> None:
         from mymem.evals.store import latest_runs
-        from mymem.pipeline import ingest as ingest_mod
+        from mymem.pipeline import ingest_background as bg
         from mymem.pipeline.router import ModelRouter
 
         async def judge_llm(prompt: str, *, model: str, system: str, max_tokens: int) -> str:
             return json.dumps({"decision": "MERGE", "target_claim_id": 1})
 
         # Patch the shared reference-LLM factory so no API key / network is needed.
-        monkeypatch.setattr(
-            ingest_mod, "_build_reference_llm", lambda: ("judge-model", judge_llm)
-        )
+        # _eval_decision_agreement_background looks it up in ingest_background.
+        monkeypatch.setattr(bg, "_build_reference_llm", lambda: ("judge-model", judge_llm))
 
         applied = [_applied(Decision.MERGE, CANDS, target=1)]  # one real judgement
         db_path = tmp_path / "data" / "mymem.db"
-        await ingest_mod._eval_decision_agreement_background(
+        await bg._eval_decision_agreement_background(
             source_name="raw/a.md",
             applied=applied,
             router=ModelRouter(llm_fn=judge_llm),
@@ -212,7 +211,7 @@ class TestBackgroundWiring:
     @pytest.mark.asyncio
     async def test_skips_when_only_trivial_adds(self, tmp_path, monkeypatch) -> None:
         from mymem.evals.store import latest_runs
-        from mymem.pipeline import ingest as ingest_mod
+        from mymem.pipeline import ingest_background as bg
         from mymem.pipeline.router import ModelRouter
 
         called = False
@@ -222,11 +221,11 @@ class TestBackgroundWiring:
             called = True
             return None
 
-        monkeypatch.setattr(ingest_mod, "_build_reference_llm", _ref)
+        monkeypatch.setattr(bg, "_build_reference_llm", _ref)
 
         applied = [_applied(Decision.ADD, candidates=())]  # nothing to judge
         db_path = tmp_path / "data" / "mymem.db"
-        await ingest_mod._eval_decision_agreement_background(
+        await bg._eval_decision_agreement_background(
             source_name="raw/a.md",
             applied=applied,
             router=ModelRouter(llm_fn=lambda *a, **k: ""),  # type: ignore[arg-type]

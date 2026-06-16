@@ -125,8 +125,11 @@
     `_eval_decision_agreement_background` (fire-and-forget) builds cases (`cases_from_applied`, drops
     trivial ADDs), judges via shared `_build_reference_llm`, persists `save_run("decision_agreement")`
     → shows in the eval suite grid. ADR-015 D17.
-  - Next: render body FROM claims (D11 end-state); cross-page retrieval (D8); graph re-key slug→id;
-    split oversized `pipeline/ingest.py` (1258 lines) into focused modules.
+  - Cleanup DONE: split `pipeline/ingest.py` (1258 lines) into focused modules — `ingest_extract.py`
+    (Map/Merge/Verify + spans), `ingest_rag.py`, `ingest_claims.py`, `ingest_background.py` (graph +
+    evals); `ingest.py` is now the ~480-line orchestrator re-exporting the moved names. Behavior-
+    preserving (851/851 green), ADR-015 D18.
+  - Next: render body FROM claims (D11 end-state); cross-page retrieval (D8); graph re-key slug→id.
   - Research: docs/research/knowledge-moat-and-free-tier-routing.md · PRD: docs/PRD/compounding-ingest.md
   - Architecture: docs/architecture/compounding-ingest.md · ADR-011 · claims key off stable `page_id`
   - Converts ingest from overwrite-by-slug (`ingest.py:315`) to atomic propositions (with verbatim

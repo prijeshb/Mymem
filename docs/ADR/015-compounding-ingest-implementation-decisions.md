@@ -284,3 +284,31 @@ decision-agreement share one reference-LLM factory (DRY).
 
 **Revisit when:** per-comparison analytics or trend charts need columnar storage → add a
 `decision_agreement` table mirroring `extraction_consensus`.
+
+---
+
+## Cleanup — Split the 1258-line ingest.py
+
+### D18. Split into focused modules; ingest.py stays the orchestrator with re-exports
+
+**Chosen:** extract four siblings — `ingest_extract.py` (Map/Merge/Verify + span grounding),
+`ingest_rag.py` (RAG index helpers), `ingest_claims.py` (claims persist + wiki sync),
+`ingest_background.py` (graph + evals) — leaving `ingest.py` as `ingest_source` +
+`IngestResult` + analytics (~480 lines). ingest.py re-exports the moved names (`__all__`)
+so existing imports and the file's CLAUDE.md "< 300 lines" intent are both honored.
+
+| Alternative | Pros | Cons | Verdict |
+|---|---|---|---|
+| **4 siblings + re-export surface** (chosen) | One reason to change per module; ~1258→≤519-line files; behavior-preserving (851/851 green); imports/patches keep working via re-export | ingest.py still ~480 (the orchestrator is irreducibly long) | ✅ |
+| Leave as one file | No churn | Violates the project's own size rule; hard to navigate | ❌ |
+| Also split `ingest_source` body | Smaller orchestrator | The compile loop is one cohesive flow; splitting it hurts readability for little gain | ❌ Defer |
+
+**Patch-target rule (recorded so it isn't re-discovered):** a monkeypatched function keeps
+working at `mymem.pipeline.ingest.X` **only if its caller also lives in ingest.py** and calls
+it unqualified (e.g. `_rag_index_wiki`). When the caller moves too, patch where it's now
+looked up — tests updated to `ingest_claims._build_claim_embedder` and
+`ingest_background._build_reference_llm`. mypy error count unchanged (9, all pre-existing,
+relocated with their code).
+
+**Revisit when:** `ingest_source` itself grows past ~300 lines → extract the per-idea
+compile loop into a `_compile_page` helper.

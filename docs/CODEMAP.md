@@ -11,8 +11,15 @@
 |------|---------------|-----------|
 | Add a field to the URL/file/text ingest form | `frontend/src/pages/IngestPage.tsx` → `SharedFields` + state + all 3 submit fns | `SharedFields` props, `postIngest/postUpload/postIngestText` |
 | Add a backend ingest param | `mymem/web/routes/api.py` → `IngestRequest` + `IngestTextRequest` + `api_upload` Form() | Lines 95–112, 347–353 |
-| Change how ideas are ranked/limited | `mymem/pipeline/ingest.py` → `_rank_extracted_ideas()` | Line 564 |
-| Change the LLM extraction prompt | `mymem/pipeline/ingest.py` → `_EXTRACT_SYSTEM` (new canonical) or `_EXTRACT_SYSTEM_TMPL` (legacy w/ max_concepts) | Lines 97, 141 |
+| Change how ideas are ranked/limited | `mymem/pipeline/ingest_extract.py` → `_rank_extracted_ideas()` | — |
+| Change the LLM extraction prompt | `mymem/pipeline/ingest_extract.py` → `_EXTRACT_SYSTEM` (canonical) or `_EXTRACT_SYSTEM_TMPL` (legacy w/ max_concepts) | — |
+| Change Map/Merge/Verify extraction | `mymem/pipeline/ingest_extract.py` → `_extract_chunk_ideas`/`_merge_ideas`/`_verify_ideas`/`_extract_ideas_map_reduce` | spans grounded in `_ground_span` |
+| Change ADD/MERGE/SUPERSEDE/NOOP decision | `mymem/pipeline/reconcile.py` → `build_decision_prompt`/`parse_decision`/`apply_decision` | parse degrades to safe ADD |
+| Change claim retrieval (candidates) | `mymem/knowledge/retrieval.py` → `retrieve_candidates()` | same-page active claims, cosine |
+| Change the claims store schema/ops | `mymem/knowledge/claims.py` (`data/claims.db`) | bi-temporal; `page_id` key (ADR-013) |
+| Change the wiki "Knowledge Claims" section | `mymem/knowledge/render.py` → `render_claims_section`/`sync_claims_section` | marker-delimited, idempotent |
+| Change compounding persistence on ingest | `mymem/pipeline/ingest_claims.py` → `_persist_claims` (+ `_sync_claims_sections`) | naive fallback if embedder down |
+| Change the decision-agreement ship gate | `mymem/evals/decision_agreement.py` → `score_decision_agreement`/`_grade` | PASS≥0.80/WARN≥0.60 |
 | Add a new LLM provider | `mymem/pipeline/llm.py` → subclass `_OpenAICompatProvider`, add branch in `build_provider()` | Lines 65–272 |
 | Add a new source type (ingest reader) | `mymem/pipeline/readers.py` → subclass `SourceReader`, register in `_default_readers()` | Lines 55–200 |
 | Add a new API endpoint | `mymem/web/routes/api.py` → `@router.get/post(...)` | Any line after existing endpoints |
@@ -32,7 +39,9 @@
 | Add an entity type | `mymem/graph/store.py` → `ENTITY_TYPES` (validated everywhere from this tuple) | |
 | Tune entity resolution thresholds | `mymem/graph/resolver.py` → `FUZZY_ACCEPT` / `FUZZY_BORDERLINE` / `COSINE_ACCEPT` | |
 | Migrate/repair the entity graph | `mymem graph backfill [--classify]` → `mymem/graph/backfill.py` | Tier-1 re-seed is idempotent |
-| Change graph-on-ingest behavior | `mymem/pipeline/ingest.py` → `_graph_extract_background()` | fire-and-forget |
+| Change graph-on-ingest behavior | `mymem/pipeline/ingest_background.py` → `_graph_extract_background()` | fire-and-forget |
+| Change RAG-on-ingest indexing | `mymem/pipeline/ingest_rag.py` → `_rag_index_pdf`/`_rag_index_wiki`/`_rag_index_text` | best-effort, never blocks |
+| Change a background eval on ingest | `mymem/pipeline/ingest_background.py` → `_eval_extraction_background`/`_eval_decision_agreement_background`; reference LLM via `_build_reference_llm` | fire-and-forget |
 
 ---
 
@@ -56,16 +65,27 @@ pipeline/
     _types.py               Interfaces: IModelRegistry, ITaskRouter, IFallbackChain, ICostTracker
     _utils.py               estimate_tokens(), fits_context(), estimate_cost()
   splitter.py               ChunkSplitter — split long docs for models with limited context
+  ingest.py                 ingest_source() orchestrator + IngestResult + analytics; re-exports the split modules
+  ingest_extract.py         Map/Merge/Verify idea extraction + prompts + IdeaSchema + span grounding (ADR-011 P1)
+  ingest_rag.py             _rag_index_pdf/_rag_index_wiki/_rag_index_text — best-effort RAG indexing on ingest
+  ingest_claims.py          _persist_claims (compounding) + _sync_claims_sections + _build_claim_embedder
+  ingest_background.py      _graph_extract_background + _eval_*_background + _build_reference_llm (fire-and-forget)
+  reconcile.py              ADD/MERGE/SUPERSEDE/NOOP decision core (ADR-011 P3): prompt/parse/apply_decision
+  compounding.py            reconcile_source_claims() — retrieve→decide→apply orchestrator → AppliedDecision
+  query.py                  query_wiki() — search wiki + RAG + LLM synthesis → SSE stream
+  lint.py                   lint_wiki() — orphan/broken-link/stub detection (pure Python, no LLM)
+  introspect.py             introspect() — daily summary, research suggestions, curiosity recs
+
+knowledge/                  Compounding ledger (ADR-011/015) — data/claims.db
+  claims.py                 bi-temporal claims store: add/get/supersede/corroborate/replace_source_claims
+  retrieval.py              retrieve_candidates() — same-page active claims by embedding cosine
+  render.py                 render_claims_section()/sync_claims_section() — "Knowledge Claims" wiki markdown
 
 graph/                      Entity layer (ADR-007) — data/graph.db
   store.py                  entities/aliases/mentions repository + delete_page() pruning + stats()
   extractor.py              extract_entities() — typed JSON extraction + rapidfuzz span grounding
   resolver.py               resolve_entities() — 3-tier: exact/alias → fuzzy+cosine → batched LLM judge
   backfill.py               seed_from_wiki() (Tier-1, idempotent repair) + classify_entities() (Tier-2 LLM)
-  ingest.py                 ingest_source() — full pipeline: read→scan→extract→compile→index→log
-  query.py                  query_wiki() — search wiki + RAG + LLM synthesis → SSE stream
-  lint.py                   lint_wiki() — orphan/broken-link/stub detection (pure Python, no LLM)
-  introspect.py             introspect() — daily summary, research suggestions, curiosity recs
 
 wiki/
   types.py                  WikiPage (incl. stable `id`), IndexEntry, LogEntry, LogOperation, TagDomain, slugify(), mint_id()
@@ -85,6 +105,7 @@ rag/
 evals/
   _base.py                  Evaluator[T] Generic ABC (Template Method) + RunContext
   extraction_consensus.py   run_extraction_consensus() — dual-LLM re-extract + cosine matching
+  decision_agreement.py     run_decision_agreement() — held-out judge vs pipeline ADD/MERGE/etc. (ship gate)
   runner.py                 EvalConfig, EvalReport, run_evals() — orchestrates all eval modules
   report.py                 render_eval_report() — Rich terminal tables
   store.py                  save_*/load_*/recent_* — eval results in data/evals.db (separate from mymem.db)
@@ -143,7 +164,7 @@ lib/
 
 ## 3. Key Function Signatures
 
-### `ingest_source()` — `mymem/pipeline/ingest.py:204`
+### `ingest_source()` — `mymem/pipeline/ingest.py` (orchestrator)
 ```python
 async def ingest_source(
     source: str,               # file path or URL
@@ -161,7 +182,7 @@ async def ingest_source(
 ) -> IngestResult
 ```
 
-### `IngestResult` — `mymem/pipeline/ingest.py:64`
+### `IngestResult` — `mymem/pipeline/ingest.py`
 ```python
 @dataclass
 class IngestResult:
@@ -301,6 +322,13 @@ text, textTitle, sourceType, domain, tagList(), maxConcepts
 | `embed_texts`, `embed_query` | `mymem.rag.ingest` (the callsite) | ~~`mymem.rag.embedder`~~ |
 | `ingest_pdf` | `mymem.rag.ingest` | |
 | `ingest_source` | via `ModelRouter(llm_fn=fake_llm)` injection | never patch ingest_source directly |
+| `_rag_index_wiki` | `mymem.pipeline.ingest` (caller `ingest_source` lives there, calls it unqualified) | |
+| `_build_claim_embedder` | `mymem.pipeline.ingest_claims` (caller `_persist_claims` moved there) | ~~`mymem.pipeline.ingest`~~ |
+| `_build_reference_llm` | `mymem.pipeline.ingest_background` (callers `_eval_*_background` moved there) | ~~`mymem.pipeline.ingest`~~ |
+
+> **Rule (ADR-015 D18):** after the ingest split, patch a function where its *caller* looks
+> it up. If the caller still lives in `ingest.py` and calls it unqualified, the re-exported
+> `mymem.pipeline.ingest.X` still works; if the caller moved to a sibling, patch the sibling.
 
 ### Standard test fixtures
 ```python
@@ -386,7 +414,11 @@ Three-step checklist for any new field across all ingest tabs:
 | File | Lines (approx) | Split if > |
 |------|---------------|-----------|
 | `mymem/web/routes/api.py` | ~1060 | Extract new route group to `routes/` |
-| `mymem/pipeline/ingest.py` | ~640 | OK (readers.py extracted) |
+| `mymem/pipeline/ingest.py` | ~480 | OK — orchestrator only (split ADR-015 D18) |
+| `mymem/pipeline/ingest_extract.py` | ~520 | OK (Map/Merge/Verify + prompts) |
+| `mymem/pipeline/ingest_background.py` | ~230 | OK |
+| `mymem/pipeline/ingest_claims.py` | ~120 | OK |
+| `mymem/pipeline/ingest_rag.py` | ~90 | OK |
 | `mymem/pipeline/readers.py` | ~260 | OK |
 | `mymem/pipeline/llm.py` | ~380 | OK (refactored to Strategy pattern) |
 | `frontend/src/pages/IngestPage.tsx` | ~490 | Watch — approaching 500 |

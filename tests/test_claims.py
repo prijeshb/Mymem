@@ -301,9 +301,11 @@ async def _run_ingest(src: Path, wiki_dir: Path, db_path: Path) -> None:
     from mymem.pipeline.ingest import ingest_source
 
     # Patch the fire-and-forget RAG indexer and the claim embedder so the test needs no Ollama.
+    # _rag_index_wiki is called via ingest's namespace; _build_claim_embedder is looked up in
+    # ingest_claims (where _persist_claims lives), so patch it there.
     with (
         patch("mymem.pipeline.ingest._rag_index_wiki", new=AsyncMock(return_value=None)),
-        patch("mymem.pipeline.ingest._build_claim_embedder", return_value=_StubEmbedder()),
+        patch("mymem.pipeline.ingest_claims._build_claim_embedder", return_value=_StubEmbedder()),
     ):
         await ingest_source(
             str(src),
