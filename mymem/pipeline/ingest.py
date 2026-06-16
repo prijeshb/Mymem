@@ -15,6 +15,7 @@ Flow:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from collections import Counter
 import textwrap
 from dataclasses import dataclass, field
@@ -314,8 +315,9 @@ async def ingest_source(
     inferred_domain = domain_from_str(domain) if domain else TagDomain.MISC
     extra_tags = normalize_tags(tags or [])
     # Atomic propositions persisted to claims.db after the loop (ADR-015 Phase 2),
-    # keyed on each page's stable id so a later rename never orphans provenance.
+    # anchored to each page's stable id so a later rename never orphans provenance.
     claim_records: list[tuple[str, str, str]] = []  # (page_id, text, source_span)
+    touched_pages: list[tuple[Path, str]] = []      # (page_path, page_id) for claims-section sync
 
     for idx, idea in enumerate(selected_ideas, 1):
         idea_title   = str(idea.get("title", "Untitled"))
@@ -376,6 +378,7 @@ async def ingest_source(
             claim_records.append(
                 (page_id, claim_text, str(idea.get("source_span", "")).strip())
             )
+        touched_pages.append((page_path, page_id))
         log.debug("Page written", path=str(page_path))
 
         # Async best-effort wiki RAG indexing (fire-and-forget; never blocks ingest)
@@ -402,6 +405,8 @@ async def ingest_source(
     # knowledge recording must never fail an ingest.
     if db_path:
         await _persist_claims(db_path, source_name, claim_records, router=router)
+        # 4c. Surface the resulting claims (incl. SUPERSEDE trail) in the wiki (ADR-015 D13).
+        _sync_claims_sections(db_path, touched_pages)
 
     # 5. Log the ingest operation
     all_touched = result.pages_written + result.pages_updated
@@ -791,6 +796,31 @@ def _preserve_spans(
         recovered = by_title.get(str(idea.get("title", "")).strip().lower(), "")
         out.append({**idea, "source_span": recovered})
     return out
+
+
+def _sync_claims_sections(db_path: Path, touched_pages: list[tuple[Path, str]]) -> None:
+    """Refresh each touched page's "Knowledge Claims" section from its current claims
+    (ADR-015 D13). Best-effort and idempotent — never raises into ingest. Writes with
+    stamp_updated=False so the page's real last-edited date (set during the compile loop)
+    is preserved.
+    """
+    claims_db = db_path.parent / "claims.db"
+    if not claims_db.exists():
+        return
+    try:
+        from mymem.knowledge.claims import claims_for_page
+        from mymem.knowledge.render import sync_claims_section
+
+        for page_path, page_id in touched_pages:
+            try:
+                page = read_page(page_path)
+                new_body = sync_claims_section(page.body, claims_for_page(claims_db, page_id))
+                if new_body != page.body:
+                    write_page(dataclasses.replace(page, body=new_body), stamp_updated=False)
+            except Exception as exc:
+                log.debug("Claims-section sync skipped", page=str(page_path), error=str(exc))
+    except Exception as exc:
+        log.warning("Claims-section sync failed (non-fatal)", error=str(exc))
 
 
 def _build_claim_embedder() -> "Embedder":

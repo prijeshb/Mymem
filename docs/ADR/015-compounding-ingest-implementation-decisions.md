@@ -189,3 +189,39 @@ returns no candidates (every brand-new page) — the common case stays free.
 
 **Revisit when:** decision quality needs a different model than `merge`, or a cheaper
 model proves sufficient for the decision → retune `_CLOUD_DEFAULTS["reconcile"]`.
+
+---
+
+## Phase 3 (cont.) — Surfacing claims in the wiki
+
+### D13. Deterministic "Knowledge Claims" section, not body-from-claims replacement
+
+**Chosen:** a pure-Python `knowledge/render.py` renders a marked `## Knowledge Claims`
+section (active claims + a struck-through Superseded subsection) that ingest syncs into
+each touched page's markdown after compounding (`_sync_claims_sections`). The LLM-compiled
+prose body is kept; the section is delimited by `<!-- claims:start/end -->` so it is
+replaced idempotently on re-ingest.
+
+| Alternative | Pros | Cons | Verdict |
+|---|---|---|---|
+| **Deterministic markdown section, prose kept** (chosen) | Surfaces the MERGE/SUPERSEDE audit trail in the durable markdown (so it flows to Obsidian exports + the SPA for free); pure/100%-tested; additive — no risk to the compile path; idempotent via markers | Page has both prose and a claims list (mild duplication) | ✅ |
+| Replace body entirely from active claims | Single source of truth in the view | Drops LLM prose quality; large change to page-write semantics; risky | ❌ Defer (D11 end-state) |
+| API endpoint + React panel only | Cleanest markdown | Durable markdown + exports miss the trail; needs frontend work; the data isn't where the reader/Obsidian looks | ❌ |
+
+**Revisit when:** a "page reflects its claims" slice renders the body *from* active claims
+(replacing LLM re-compilation) — then the prose and the section converge and this section
+wrapper folds into that renderer.
+
+### D14. Sync writes with stamp_updated=False; best-effort, gated on claims.db
+
+**Chosen:** `_sync_claims_sections` re-reads each touched page, syncs the section, and
+writes back with `stamp_updated=False` (the compile loop already stamped `updated=today`).
+It no-ops when `claims.db` is absent and never raises into ingest.
+
+| Alternative | Pros | Cons | Verdict |
+|---|---|---|---|
+| **stamp_updated=False, best-effort** (chosen) | Doesn't double-bump or corrupt the real edit date; a sync failure can't break an ingest; cheap (one extra read+write per touched page) | A second write per page per ingest | ✅ |
+| Inject the section during the main compile-write | One write | The claims don't exist yet at compile time (compounding runs after the loop) — would need a major reorder | ❌ |
+
+**Revisit when:** touched-page counts get large enough that the extra write matters → batch
+the section sync, or fold it into the compile-write once claims precede page writes.

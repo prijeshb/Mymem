@@ -59,6 +59,7 @@
 | Reconcile decision core (compounding ingest P3a) | `mymem/pipeline/reconcile.py` | DONE — 100% cov, ADR-015 D8-D12 |
 | Claim retrieval (compounding ingest P3b) | `mymem/knowledge/retrieval.py` | DONE — 100% cov |
 | Retrieve→decide→apply orchestrator + ingest wiring (P3c) | `mymem/pipeline/compounding.py`, `ingest.py` | DONE — 100% cov |
+| Claims-section wiki rendering + sync (P3 D13) | `mymem/knowledge/render.py`, `ingest.py` | DONE — 100% cov, ADR-015 D13-D14 |
 
 ## Security Status
 - **Last Audit**: 2026-06-11
@@ -110,9 +111,12 @@
     (retrieve→decide→apply orchestrator, 100% cov). Ingest's `_persist_claims` now compounds
     per proposition with a naive-replace fallback when the embedder is down; `reconcile` task
     added to the router. ADR-015 D8-D12.
-  - Next: render page body FROM active claims so MERGE/SUPERSEDE show in the wiki (ADR-015 D11);
-    decision-agreement eval + ship gates (PRD §Success Metrics); cross-page retrieval (D8);
-    graph re-key slug→id.
+  - Phase 3 (cont.) DONE: `knowledge/render.py` renders a deterministic `## Knowledge Claims`
+    section (active + struck-through superseded trail) synced into each touched page's markdown
+    after compounding (`_sync_claims_sections`, idempotent, marker-delimited, prose kept). The
+    MERGE/SUPERSEDE audit trail now shows in the wiki + Obsidian exports. 100% cov. ADR-015 D13-D14.
+  - Next: decision-agreement eval + ship gates (PRD §Success Metrics); render body FROM claims
+    (D11 end-state, replacing LLM re-compile); cross-page retrieval (D8); graph re-key slug→id.
   - Research: docs/research/knowledge-moat-and-free-tier-routing.md · PRD: docs/PRD/compounding-ingest.md
   - Architecture: docs/architecture/compounding-ingest.md · ADR-011 · claims key off stable `page_id`
   - Converts ingest from overwrite-by-slug (`ingest.py:315`) to atomic propositions (with verbatim
@@ -151,4 +155,4 @@
 - Extraction consensus PASS rate on ingested articles (3 runs recorded: 2× WARN, 1× PASS)
 - Mean duplicate concept pairs per ingest (target: near 0 after dedup)
 - Wiki page coverage: ideas from full document via map-reduce (no longer limited to 6000 chars)
-- Test suite: 825 passing / 1 skipped as of 2026-06-15 (compounding ingest Phases 1-3 complete)
+- Test suite: 837 passing / 1 skipped as of 2026-06-15 (compounding ingest Phases 1-3 + wiki claims section)
