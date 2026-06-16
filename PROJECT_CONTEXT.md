@@ -61,6 +61,7 @@
 | Retrieve→decide→apply orchestrator + ingest wiring (P3c) | `mymem/pipeline/compounding.py`, `ingest.py` | DONE — 100% cov |
 | Claims-section wiki rendering + sync (P3 D13) | `mymem/knowledge/render.py`, `ingest.py` | DONE — 100% cov, ADR-015 D13-D14 |
 | Decision-agreement eval / ship gate (P3 D15) | `mymem/evals/decision_agreement.py` | DONE — 100% cov, ADR-015 D15-D16 |
+| Decision-eval live capture + background wiring (P3 D17) | `mymem/pipeline/compounding.py`, `ingest.py`, `evals/decision_agreement.py` | DONE — ADR-015 D17 |
 
 ## Security Status
 - **Last Audit**: 2026-06-11
@@ -120,8 +121,12 @@
     — held-out judge re-decides ADD/MERGE/SUPERSEDE/NOOP, label-agreement rate graded
     PASS≥0.80/WARN≥0.60; reuses reconcile prompt/parse (`RECONCILE_SYSTEM` made public); 100% cov.
     ADR-015 D15-D16.
-  - Next: wire live decision-case capture into the background eval + persist to evals.db (D16 trigger);
-    render body FROM claims (D11 end-state); cross-page retrieval (D8); graph re-key slug→id.
+  - Decision-eval now LIVE on ingest: `reconcile_source_claims` returns typed `AppliedDecision`s;
+    `_eval_decision_agreement_background` (fire-and-forget) builds cases (`cases_from_applied`, drops
+    trivial ADDs), judges via shared `_build_reference_llm`, persists `save_run("decision_agreement")`
+    → shows in the eval suite grid. ADR-015 D17.
+  - Next: render body FROM claims (D11 end-state); cross-page retrieval (D8); graph re-key slug→id;
+    split oversized `pipeline/ingest.py` (1258 lines) into focused modules.
   - Research: docs/research/knowledge-moat-and-free-tier-routing.md · PRD: docs/PRD/compounding-ingest.md
   - Architecture: docs/architecture/compounding-ingest.md · ADR-011 · claims key off stable `page_id`
   - Converts ingest from overwrite-by-slug (`ingest.py:315`) to atomic propositions (with verbatim
@@ -160,4 +165,4 @@
 - Extraction consensus PASS rate on ingested articles (3 runs recorded: 2× WARN, 1× PASS)
 - Mean duplicate concept pairs per ingest (target: near 0 after dedup)
 - Wiki page coverage: ideas from full document via map-reduce (no longer limited to 6000 chars)
-- Test suite: 846 passing / 1 skipped as of 2026-06-15 (compounding ingest Phases 1-3 + wiki claims section + decision-agreement eval)
+- Test suite: 851 passing / 1 skipped as of 2026-06-15 (compounding ingest Phases 1-3 + wiki claims section + decision-agreement eval live on ingest)

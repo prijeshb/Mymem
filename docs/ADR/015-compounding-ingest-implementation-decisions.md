@@ -263,3 +263,24 @@ decision saw) is a follow-up so this slice stays a pure, 100%-tested metric.
 candidates per decision, build `DecisionCase`s in the background eval (next to
 extraction-consensus), and persist results to `data/evals.db` for the suite grid. Tune
 PASS/WARN once real agreement numbers exist (PRD leaves target% open).
+
+### D17. Live capture via typed AppliedDecision + generic save_run; drop trivial ADDs
+
+**Chosen:** `reconcile_source_claims` now returns typed `AppliedDecision`s (proposition +
+candidates + result + claim). `_eval_decision_agreement_background` (fire-and-forget, next
+to extraction-consensus) builds cases via `cases_from_applied`, judges them with the shared
+`_build_reference_llm`, and persists through the **generic `save_run("decision_agreement",
+…)`** (no bespoke table). Trivial no-candidate ADDs are excluded — they weren't LLM
+judgements, so counting them would inflate agreement.
+
+| Alternative | Pros | Cons | Verdict |
+|---|---|---|---|
+| **AppliedDecision return + generic save_run, drop trivial ADDs** (chosen) | Candidates captured at the one place that has them; the suite grid (`latest_summary`/`history_by_type`) picks up `decision_agreement` for free; metric reflects real judgements only | Return-type change rippled to compounding tests | ✅ |
+| Bespoke `decision_agreement` table (like extraction_consensus) | Columnar queries | Premature — generic `eval_runs` already serves the grid; add a table only if per-comparison SQL is needed | ❌ Defer |
+| Count every decision incl. no-candidate ADDs | Simplest capture | Inflates agreement with free ADDs the LLM never judged | ❌ |
+
+Also extracted `_build_reference_llm` (provider/key plumbing) so extraction-consensus and
+decision-agreement share one reference-LLM factory (DRY).
+
+**Revisit when:** per-comparison analytics or trend charts need columnar storage → add a
+`decision_agreement` table mirroring `extraction_consensus`.

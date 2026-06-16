@@ -54,7 +54,8 @@ class TestReconcileSourceClaims:
             db, "raw/a.md", _props("first claim", "second claim"),
             router=_router("ignored"), embedder=StubEmbedder(),
         )
-        assert [r.decision for r, _ in out] == [Decision.ADD, Decision.ADD]
+        assert [a.result.decision for a in out] == [Decision.ADD, Decision.ADD]
+        assert out[0].candidates == ()  # first proposition saw an empty page
         assert stats(db) == ClaimsStats(total=2, active=2, superseded=0)
 
     @pytest.mark.asyncio
@@ -66,7 +67,8 @@ class TestReconcileSourceClaims:
         out = await reconcile_source_claims(
             db, "raw/a.md", _props("known fact restated"), router=router, embedder=StubEmbedder()
         )
-        assert out[0][0].decision is Decision.NOOP
+        assert out[0].result.decision is Decision.NOOP
+        assert out[0].candidates[0].claim_id == existing.id  # the candidate it judged
         # No new claim; the existing one was corroborated.
         assert stats(db) == ClaimsStats(total=1, active=1, superseded=0)
         assert claims_for_page(db, PAGE)[0].confidence == pytest.approx(0.6)
@@ -78,7 +80,7 @@ class TestReconcileSourceClaims:
         out = await reconcile_source_claims(
             db, "raw/a.md", _props("It launched in 2014."), router=router, embedder=StubEmbedder()
         )
-        assert out[0][0].decision is Decision.SUPERSEDE
+        assert out[0].result.decision is Decision.SUPERSEDE
         # Old retired, new active — nothing hard-deleted.
         assert stats(db) == ClaimsStats(total=2, active=1, superseded=1)
 

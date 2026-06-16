@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Awaitable
 
 if TYPE_CHECKING:
+    from mymem.pipeline.compounding import AppliedDecision
     from mymem.rag.embedder import Embedder
 
 from pydantic import BaseModel, Field as PydanticField, ValidationError
@@ -403,8 +404,11 @@ async def ingest_source(
 
     # 4b. Compound atomic propositions into claims.db (ADR-015 Phase 3c). Best-effort:
     # knowledge recording must never fail an ingest.
+    applied_decisions: list[AppliedDecision] = []
     if db_path:
-        await _persist_claims(db_path, source_name, claim_records, router=router)
+        applied_decisions = await _persist_claims(
+            db_path, source_name, claim_records, router=router
+        )
         # 4c. Surface the resulting claims (incl. SUPERSEDE trail) in the wiki (ADR-015 D13).
         _sync_claims_sections(db_path, touched_pages)
 
@@ -443,6 +447,17 @@ async def ingest_source(
                 source_type=source_type,
                 source_text=source_text,
                 pipeline_ideas=selected_ideas,
+                router=router,
+                db_path=db_path,
+            )
+        )
+
+    # Background decision-agreement eval (ship gate, fire-and-forget — never blocks ingest)
+    if db_path and applied_decisions:
+        asyncio.ensure_future(
+            _eval_decision_agreement_background(
+                source_name=source_name,
+                applied=applied_decisions,
                 router=router,
                 db_path=db_path,
             )
@@ -848,16 +863,17 @@ async def _persist_claims(
     records: list[tuple[str, str, str]],
     *,
     router: "ModelRouter",
-) -> None:
+) -> list[AppliedDecision]:
     """Compound this source's propositions into claims.db (ADR-015 Phase 3c).
 
     For each proposition: retrieve similar active claims on its page → LLM decides
-    ADD/MERGE/SUPERSEDE/NOOP → apply to the bi-temporal ledger. If retrieval/decision is
-    unavailable (embedder down), fall back to idempotent naive provenance. Never raises —
-    knowledge recording must not break an ingest.
+    ADD/MERGE/SUPERSEDE/NOOP → apply to the bi-temporal ledger. Returns the applied
+    decisions (for the decision-agreement eval); empty on the naive-fallback path. If
+    retrieval/decision is unavailable (embedder down), fall back to idempotent naive
+    provenance. Never raises — knowledge recording must not break an ingest.
     """
     if not records:
-        return
+        return []
     from mymem.knowledge.claims import init_db
     from mymem.pipeline.compounding import reconcile_source_claims
     from mymem.pipeline.reconcile import Proposition
@@ -869,11 +885,12 @@ async def _persist_claims(
             Proposition(text=text, page_id=pid, source_span=span)
             for pid, text, span in records
         ]
-        await reconcile_source_claims(
+        applied = await reconcile_source_claims(
             claims_db, source_id, propositions,
             router=router, embedder=_build_claim_embedder(),
         )
         log.info("Claims compounded", source=source_id, propositions=len(propositions))
+        return applied
     except Exception as exc:
         log.warning(
             "Claims compounding failed; falling back to naive persist",
@@ -885,6 +902,7 @@ async def _persist_claims(
             log.warning(
                 "Claims persistence failed (non-fatal)", source=source_id, error=str(exc2)
             )
+        return []
 
 
 async def _extract_chunk_ideas(
@@ -1084,6 +1102,47 @@ async def _graph_extract_background(
         )
 
 
+def _build_reference_llm() -> tuple[str, Callable[..., Awaitable[str]]] | None:
+    """(reference_model, llm_fn) for background evals per `eval_reference_provider`, or None
+    when no API key is configured. Shared by the extraction-consensus and decision-agreement
+    evals so the provider/key plumbing lives in one place. Isolated for patching in tests."""
+    from mymem.config import get_settings
+    from mymem.evals.extraction_consensus import (
+        GROQ_DEFAULT_MODEL,
+        NVIDIA_DEFAULT_MODEL,
+        OPENROUTER_DEFAULT_MODEL,
+    )
+    from mymem.pipeline.llm import complete
+
+    settings = get_settings()
+    provider = settings.eval_reference_provider
+    keys_models = {
+        "groq": (settings.groq_api_key, GROQ_DEFAULT_MODEL),
+        "gemini": (settings.gemini_api_key, "gemini-2.0-flash"),
+        "nvidia": (settings.nvidia_api_key, NVIDIA_DEFAULT_MODEL),
+        "openrouter": (settings.openrouter_api_key, OPENROUTER_DEFAULT_MODEL),
+    }
+    api_key, ref_model = keys_models.get(provider, (None, ""))
+    if not api_key:
+        log.debug("Background eval skipped — no API key for reference provider", provider=provider)
+        return None
+
+    async def _llm_fn(prompt: str, *, model: str, system: str, max_tokens: int) -> str:
+        return await complete(
+            prompt,
+            model=model,
+            provider=provider,
+            system=system,
+            max_tokens=max_tokens,
+            groq_api_key=api_key if provider == "groq" else "",
+            gemini_api_key=api_key if provider == "gemini" else "",
+            nvidia_api_key=api_key if provider == "nvidia" else "",
+            openrouter_api_key=api_key if provider == "openrouter" else "",
+        )
+
+    return ref_model, _llm_fn
+
+
 async def _eval_extraction_background(
     *,
     source_name: str,
@@ -1099,56 +1158,18 @@ async def _eval_extraction_background(
     Never raises — all errors are logged and swallowed.
     """
     try:
-        from mymem.config import get_settings
-        from mymem.evals.extraction_consensus import (
-            GROQ_DEFAULT_MODEL,
-            NVIDIA_DEFAULT_MODEL,
-            OPENROUTER_DEFAULT_MODEL,
-            run_extraction_consensus,
-        )
+        from mymem.evals.extraction_consensus import run_extraction_consensus
         from mymem.evals.store import save_extraction_consensus
-        from mymem.pipeline.llm import complete
 
-        settings = get_settings()
-        provider = settings.eval_reference_provider
-
-        if provider == "groq":
-            api_key = settings.groq_api_key
-            ref_model = GROQ_DEFAULT_MODEL
-        elif provider == "gemini":
-            api_key = settings.gemini_api_key
-            ref_model = "gemini-2.0-flash"
-        elif provider == "nvidia":
-            api_key = settings.nvidia_api_key
-            ref_model = NVIDIA_DEFAULT_MODEL
-        elif provider == "openrouter":
-            api_key = settings.openrouter_api_key
-            ref_model = OPENROUTER_DEFAULT_MODEL
-        else:
-            api_key = None
-            ref_model = ""
-
-        if not api_key:
-            log.debug(
-                "Extraction eval skipped — no API key for reference provider",
-                provider=provider,
-            )
+        ref = _build_reference_llm()
+        if ref is None:
             return
+        ref_model, _llm_fn = ref
 
-        async def _llm_fn(prompt: str, *, model: str, system: str, max_tokens: int) -> str:
-            return await complete(
-                prompt,
-                model=model,
-                provider=provider,
-                system=system,
-                max_tokens=max_tokens,
-                groq_api_key=api_key if provider == "groq" else "",
-                gemini_api_key=api_key if provider == "gemini" else "",
-                nvidia_api_key=api_key if provider == "nvidia" else "",
-                openrouter_api_key=api_key if provider == "openrouter" else "",
-            )
-
-        pipeline_model = router.task_router.model_for("compile") if hasattr(router, "task_router") else "unknown"
+        pipeline_model = (
+            router.task_router.model_for("compile")
+            if hasattr(router, "task_router") else "unknown"
+        )
 
         result = await run_extraction_consensus(
             source_id=source_name,
@@ -1172,6 +1193,66 @@ async def _eval_extraction_background(
     except Exception as exc:
         log.warning(
             "Extraction consensus eval failed (background)",
+            source=source_name,
+            error=str(exc),
+        )
+
+
+async def _eval_decision_agreement_background(
+    *,
+    source_name: str,
+    applied: list[AppliedDecision],
+    router: ModelRouter,
+    db_path: Path,
+) -> None:
+    """Fire-and-forget: re-judge this ingest's reconcile decisions with a held-out LLM and
+    record the agreement (ship gate, ADR-015 D15-D17). Skips when there's nothing to judge
+    or no reference key. Never raises — eval failures must not affect ingest.
+    """
+    try:
+        from mymem.evals.decision_agreement import cases_from_applied, run_decision_agreement
+        from mymem.evals.store import save_run
+
+        cases = cases_from_applied(applied)
+        if not cases:
+            return  # only trivial ADDs — no judgement to score
+        ref = _build_reference_llm()
+        if ref is None:
+            return
+        judge_model, judge_llm = ref
+
+        pipeline_model = (
+            router.task_router.model_for("reconcile")
+            if hasattr(router, "task_router") else "unknown"
+        )
+        result = await run_decision_agreement(
+            cases, pipeline_model=pipeline_model, judge_model=judge_model, llm_fn=judge_llm
+        )
+
+        evals_db = db_path.parent / "evals.db"
+        save_run(
+            evals_db,
+            "decision_agreement",
+            summary={
+                "agreement_rate": result.agreement_rate,
+                "target_agreement_rate": result.target_agreement_rate,
+                "grade": result.grade,
+                "n_cases": len(cases),
+                "pipeline_model": pipeline_model,
+                "judge_model": judge_model,
+            },
+            details={"comparisons": [dataclasses.asdict(c) for c in result.comparisons]},
+        )
+        log.info(
+            "Decision-agreement eval complete",
+            source=source_name,
+            grade=result.grade,
+            agreement_rate=result.agreement_rate,
+            cases=len(cases),
+        )
+    except Exception as exc:
+        log.warning(
+            "Decision-agreement eval failed (background)",
             source=source_name,
             error=str(exc),
         )

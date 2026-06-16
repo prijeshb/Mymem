@@ -10,12 +10,14 @@ in tests without Ollama. Wiki page bodies are still written by ingest (single re
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from mymem.knowledge.claims import Claim
 from mymem.knowledge.retrieval import retrieve_candidates
 from mymem.observability.logger import get_logger
 from mymem.pipeline.reconcile import (
+    Candidate,
     Proposition,
     ReconcileResult,
     apply_decision,
@@ -27,6 +29,16 @@ from mymem.rag.embedder import Embedder
 log = get_logger(__name__)
 
 
+@dataclass(frozen=True)
+class AppliedDecision:
+    """What the compounding step did for one proposition — enough to enrich page bodies,
+    surface a SUPERSEDE trail, or feed the decision-agreement eval."""
+    proposition: Proposition
+    candidates: tuple[Candidate, ...]
+    result: ReconcileResult
+    claim: Claim
+
+
 async def reconcile_source_claims(
     db_path: Path,
     source_id: str,
@@ -36,13 +48,13 @@ async def reconcile_source_claims(
     embedder: Embedder,
     top_k: int = 5,
     min_similarity: float = 0.6,
-) -> list[tuple[ReconcileResult, Claim]]:
+) -> list[AppliedDecision]:
     """Reconcile each proposition against existing claims and apply the decision.
 
-    Returns one (decision, resulting-claim) pair per proposition, in order, so callers can
-    enrich page bodies on MERGE or surface SUPERSEDE trails.
+    Returns one AppliedDecision per proposition, in order, carrying the candidates seen so
+    callers can enrich pages, show SUPERSEDE trails, or score decision agreement.
     """
-    results: list[tuple[ReconcileResult, Claim]] = []
+    applied: list[AppliedDecision] = []
     for prop in propositions:
         candidates = await retrieve_candidates(
             db_path, prop.text, prop.page_id,
@@ -50,10 +62,17 @@ async def reconcile_source_claims(
         )
         decision = await reconcile(prop, candidates, router=router)
         claim = apply_decision(db_path, decision, prop, source_id=source_id)
-        results.append((decision, claim))
+        applied.append(
+            AppliedDecision(
+                proposition=prop,
+                candidates=tuple(candidates),
+                result=decision,
+                claim=claim,
+            )
+        )
 
     counts: dict[str, int] = {}
-    for decision, _ in results:
-        counts[decision.decision.value] = counts.get(decision.decision.value, 0) + 1
+    for a in applied:
+        counts[a.result.decision.value] = counts.get(a.result.decision.value, 0) + 1
     log.info("Compounding reconcile complete", source=source_id, **counts)
-    return results
+    return applied

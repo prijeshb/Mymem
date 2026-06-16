@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from mymem.observability.logger import get_logger
 from mymem.pipeline.reconcile import (
@@ -25,6 +26,9 @@ from mymem.pipeline.reconcile import (
     build_decision_prompt,
     parse_decision,
 )
+
+if TYPE_CHECKING:
+    from mymem.pipeline.compounding import AppliedDecision
 
 log = get_logger(__name__)
 
@@ -61,6 +65,26 @@ class DecisionAgreementResult:
     pipeline_model: str
     judge_model: str
     grade: str                   # PASS | WARN | FAIL
+
+
+def cases_from_applied(applied: list[AppliedDecision]) -> list[DecisionCase]:
+    """Build judge-able cases from what compounding did.
+
+    Drops trivial ADDs that had no candidates — those weren't an LLM judgement (the pipeline
+    short-circuits to ADD with no candidates), so including them would inflate agreement. An
+    ADD made *despite* candidates is a real judgement (the model chose not to merge) and is
+    kept.
+    """
+    return [
+        DecisionCase(
+            proposition=a.proposition.text,
+            candidates=a.candidates,
+            pipeline_decision=a.result.decision,
+            pipeline_target=a.result.target_claim_id,
+        )
+        for a in applied
+        if a.candidates
+    ]
 
 
 def _grade(agreement_rate: float, total: int) -> str:
