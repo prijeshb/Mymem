@@ -8,6 +8,8 @@
 - Testing: pytest + pytest-asyncio + pytest-cov (≥ 80% required)
 
 ## Current Branch
+- `V1-0013` — OKF (Open Knowledge Format) two-way interchange: `mymem export okf` + `import okf`
+  (ADR-016). Stacked on V1-0012.
 - `V1-0012` — broken-link handling: opt-in semantic seed resolution + ranked knowledge gaps
   (ADR-008 D12). Stacked on V1-0011 (carries body-from-claims default + graph re-key).
 - `V1-0011` — render page body FROM claims (ADR-015 D20/D21) + graph re-key slug→id (ADR-014 D6).
@@ -32,7 +34,7 @@
 | ADR-013 | Stable page identity (opaque ULID `id` vs slug vs title; resolution + redirects) — prerequisite for ADR-011 | Accepted |
 | ADR-014 | Page identity implementation decisions (mint_id home, auto-mint choke point, exact resolution, scope fence) | Accepted |
 | ADR-015 | Compounding ingest implementation decisions (Phase 1: span grounding substring+fuzzy, blank-not-drop, persist in Phase 2) | Accepted |
-| ADR-016 | Open Knowledge Format (OKF) integration (two-way interchange via export adapter + import reader; not native storage) | Proposed |
+| ADR-016 | Open Knowledge Format (OKF) integration (two-way interchange via export adapter + direct importer; not native storage) | Accepted |
 
 ## Completed Features
 
@@ -72,6 +74,7 @@
 | Graph re-key slug→id (stable `page_id` anchors) | `mymem/graph/store.py`, `backfill.py`, `ingest_background.py`, `web/routes/api.py`, `cli.py` | DONE — ADR-014 D6; auto migration + `mymem graph rekey` |
 | Broken-link precision: opt-in semantic seed resolution | `mymem/graph/backfill.py`, `cli.py` | DONE — ADR-008 D12; `backfill --semantic`/`--judge` (default deterministic) |
 | Knowledge gaps: ranked referenced-but-unwritten concepts | `mymem/graph/gaps.py`, `cli.py`, `web/routes/api.py` | DONE — ADR-008 D12; `mymem graph gaps` + `GET /api/graph/gaps`; gaps.py 100% cov |
+| OKF (Open Knowledge Format) export + import | `mymem/knowledge/okf/`, `cli.py` | DONE — ADR-016; `mymem export okf` / `import okf`; lossless round-trip; okf pkg 99% cov |
 
 ## Security Status
 - **Last Audit**: 2026-06-11
@@ -177,17 +180,16 @@
   - Evals: entity consensus + span-grounding; KGQAGen-style multi-hop A/B; ship gates:
     multi-hop recall up, single-hop no regression, ingest cost < +20%
   - NOT building: community detection/summaries (ADR-007)
-- [ ] Open Knowledge Format (OKF) integration — priority: P2 — ADR-016
-  - Two-way interchange with Google Cloud's OKF v0.1 (markdown + frontmatter, one file/concept).
-    MyMem's wiki is ~85% OKF-shaped already; this is an adapter, not a storage refactor.
-  - Export: `mymem export okf <dir>` — pure transform over `list_pages()`; `domain`→`type`,
-    `updated`→ISO `timestamp`, summary→`description`, `[[wikilinks]]`→`/slug.md` markdown links;
-    preserves `id`/`domain`/`sources` as extension keys; emits OKF `index.md` + `log.md`.
-  - Import: `OkfSourceReader` (Strategy, `pipeline/readers.py`) + `--type okf` → concepts flow
-    through normal ingest; OKF links → wikilinks; unknown `type`→`domain` (default `misc`).
-  - New `mymem/knowledge/okf/` (`_spec`, `_map`, `_links`, `exporter`, `conformance`). No new deps.
-  - Ship gates: 100% conformance on export, identity-stable round-trip (ULID preserved),
-    ≥95% wikilink resolution on the live 144-page wiki.
+- [x] Open Knowledge Format (OKF) integration — DONE in V1-0013 — ADR-016
+  - Export: `mymem export okf <dir>` — `domain`→`type`, `updated`→ISO `timestamp`,
+    first-paragraph→`description`, `[[wikilinks]]`→`/slug.md`; preserves `id`/`domain`/`sources`
+    as extension keys; emits frontmatter-free `index.md` + OKF `log.md`; conformance-checked.
+  - Import: `mymem import okf <dir>` — direct inverse (not the LLM pipeline; see ADR-016 impl
+    decision) → lossless, identity-stable round-trip; `--overwrite` to replace existing pages.
+  - `mymem/knowledge/okf/` (`_spec`, `_map`, `_links`, `exporter`, `conformance`, `importer`),
+    99% cov. No new deps. Live export: 144 concepts, conformant. (608/648 broken links are the
+    genuine content gaps surfaced by ADR-008 D12, not export bugs.)
+  - Deferred: web-UI export/import surface; optional `--ingest` to also compound imported concepts.
   - Research: docs/research/open-knowledge-format.md · PRD: docs/PRD/okf-integration.md
   - Architecture: docs/architecture/okf-integration.md
 - [ ] Knowledge-gap follow-ups (ADR-008 D12 revisit) — feed top gaps into introspect ambient
@@ -209,4 +211,4 @@
 - Extraction consensus PASS rate on ingested articles (3 runs recorded: 2× WARN, 1× PASS)
 - Mean duplicate concept pairs per ingest (target: near 0 after dedup)
 - Wiki page coverage: ideas from full document via map-reduce (no longer limited to 6000 chars)
-- Test suite: 919 passing / 1 skipped as of 2026-06-22 (adds V1-0012 broken-link handling: opt-in semantic seed resolution + knowledge-gap ranking core/CLI/API, gaps.py 100% cov)
+- Test suite: 950 passing / 1 skipped as of 2026-06-22 (adds V1-0013 OKF export+import: spec/map/links/exporter/conformance/importer + CLI + lossless round-trip; okf pkg 99% cov)

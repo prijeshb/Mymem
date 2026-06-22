@@ -24,10 +24,14 @@ obsidian_app = typer.Typer(name="obsidian", help="Obsidian vault integration.")
 graph_app    = typer.Typer(name="graph", help="Entity graph operations (ADR-007).")
 pages_app    = typer.Typer(name="pages", help="Wiki page identity operations (ADR-013).")
 claims_app   = typer.Typer(name="claims", help="Compounding claims ledger ops (ADR-011/015).")
+export_app   = typer.Typer(name="export", help="Export the wiki to interchange formats (ADR-016).")
+import_app   = typer.Typer(name="import", help="Import interchange-format bundles into the wiki (ADR-016).")
 app.add_typer(obsidian_app, name="obsidian")
 app.add_typer(graph_app, name="graph")
 app.add_typer(pages_app, name="pages")
 app.add_typer(claims_app, name="claims")
+app.add_typer(export_app, name="export")
+app.add_typer(import_app, name="import")
 console = Console()
 err     = Console(stderr=True, style="red")
 
@@ -334,6 +338,71 @@ def tags() -> None:
         color = "green" if w >= 2.0 else ("dim" if w < 0.5 else "yellow")
         table.add_row(str(i["domain"]), str(i["tag"]), f"{w:.2f}", f"[{color}]{trend}[/]")
 
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# mymem export
+# ---------------------------------------------------------------------------
+
+@export_app.command("okf")
+def export_okf_cmd(
+    out_dir: str = typer.Argument(..., help="Directory to write the OKF bundle into"),
+) -> None:
+    """Export the wiki to a conformant Open Knowledge Format (OKF v0.1) bundle.
+
+    Writes one markdown concept file per page (frontmatter mapped, [[wikilinks]]
+    rewritten to OKF markdown links) plus index.md and log.md. Broken wikilinks
+    are emitted OKF-tolerantly and reported.
+    """
+    settings = _get_settings()
+    wiki_dir, *_ = _paths(settings)
+
+    from mymem.knowledge.okf.exporter import export_okf
+
+    report = export_okf(wiki_dir, Path(out_dir))
+
+    table = Table(title="OKF Export", show_lines=False)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", justify="right")
+    table.add_row("Concepts written", str(report.pages))
+    table.add_row("Links resolved", str(report.links_resolved))
+    table.add_row("Links broken", str(report.links_broken))
+    table.add_row("Conformant", "[green]yes[/]" if report.conformant else "[red]no[/]")
+    console.print(table)
+    console.print(f"[dim]Bundle written to[/] [cyan]{report.out_dir}[/]")
+
+
+@import_app.command("okf")
+def import_okf_cmd(
+    bundle_dir: str = typer.Argument(..., help="OKF bundle directory to import"),
+    overwrite: bool = typer.Option(False, "--overwrite",
+        help="Overwrite wiki pages that already exist (default: skip them)"),
+) -> None:
+    """Import an Open Knowledge Format (OKF v0.1) bundle into the wiki.
+
+    Each concept file becomes a wiki page (frontmatter mapped back, OKF markdown
+    links restored to [[wikilinks]]). A MyMem-origin bundle round-trips with its
+    stable page ids intact. Existing pages are skipped unless --overwrite is set.
+    """
+    settings = _get_settings()
+    wiki_dir, *_ = _paths(settings)
+
+    src = Path(bundle_dir)
+    if not src.exists():
+        err.print(f"Bundle directory not found: {src}")
+        raise typer.Exit(code=1)
+
+    from mymem.knowledge.okf.importer import import_okf
+
+    report = import_okf(src, wiki_dir, overwrite=overwrite)
+
+    table = Table(title="OKF Import", show_lines=False)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Count", justify="right")
+    table.add_row("Concepts found", str(report.concepts))
+    table.add_row("Pages written", str(report.written))
+    table.add_row("Skipped", str(report.skipped))
     console.print(table)
 
 
