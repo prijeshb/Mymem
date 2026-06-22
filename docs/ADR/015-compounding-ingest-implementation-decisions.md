@@ -349,3 +349,65 @@ table only if claim-level vectors prove necessary").
 **Revisit when:** claim count makes per-prop embedding the bottleneck → batch-embed a source's
 propositions up-front (loses intra-batch indexing) or precompute on write; or when
 `delete_source` leaves enough dead vectors to hurt recall → add vec cleanup there.
+
+---
+
+## D11 realized — Render page body FROM claims (opt-in)
+
+### D20. Opt-in `body_from_claims`: render the body from claims, behind a config flag
+
+**Chosen:** the D11 end-state ("page reflects its active claims") ships as an **opt-in**
+`pipeline.body_from_claims` flag (default off). When on, `_sync_claims_sections` renders each
+touched page's body via a new pure `render_page_body(title, claims, see_also=…)` instead of
+appending the D13 `## Knowledge Claims` section. The renderer is deterministic (heading +
+active claims as confidence bullets + struck-through SUPERSEDE trail + preserved `## See Also`
+wikilinks) and returns `""` when there are **no active claims** — so the caller keeps existing
+prose and an empty/down-embedder ledger can never wipe a page. The wikilinks of the prior body
+are re-emitted into See Also so the knowledge graph survives the switch from prose.
+
+This realizes the trigger deferred in **D11** and **D13** ("a 'page reflects its claims' slice
+renders the body *from* active claims, replacing LLM re-compilation").
+
+| Alternative | Pros | Cons | Verdict |
+|---|---|---|---|
+| **Opt-in flag, deterministic renderer, prose-safe** (chosen) | Default behavior byte-identical to D13 (flag off); MERGE/SUPERSEDE now drive the visible body, not just a section; pure/100%-tested renderer; graph preserved via See Also passthrough; no-active-claims guard means it can't gut a page | Two render modes coexist until the flag becomes default; body drops LLM prose nuance the claims don't capture | ✅ |
+| Flip the behavior unconditionally | One mode, simpler | Large, irreversible change to page-write semantics across every existing page; risky with no escape hatch (D11 flagged "large, error-prone") | ❌ |
+| Render body from claims at compile time (no post-pass) | One write per page | Claims don't exist yet at compile time (compounding runs after the loop) — needs a major reorder; the D14 ordering constraint still holds | ❌ |
+
+**Sub-decisions:**
+- **Reuses the post-compounding sync seam** (`_sync_claims_sections`, D14) — it already re-reads
+  and re-writes each touched page after claims exist, with `stamp_updated=False`. No new pass.
+- **Flag threaded by injection**, not read from global config in the pipeline: `ingest_source`
+  takes `body_from_claims: bool = False`; CLI and all three API call sites pass
+  `settings.pipeline.body_from_claims`. Matches the codebase's router/embedder injection style.
+- **Scope fence:** the CLI ingest path still doesn't pass `db_path`, so claims (and therefore
+  this flag) are a no-op there today — wiring CLI claims persistence is a separate slice, not
+  folded in here.
+
+**Revisit when:** the flag has run live long enough to trust → make `body_from_claims` the
+default and fold the D13 section renderer into `render_page_body` (one mode). If dropping LLM
+prose loses value, render claims *and* keep a compiled summary block instead of replacing it.
+
+### D21. Flip `body_from_claims` to default-on (D20's revisit trigger fired)
+
+**Chosen:** `PipelineConfig.body_from_claims` now defaults to **True** (V1-0011). The D11
+end-state is the standard behavior: every ingested/re-compiled page renders its body FROM its
+active claims. The D13 `## Knowledge Claims`-section mode remains reachable by setting
+`pipeline.body_from_claims: false` in `config.yaml`.
+
+| Alternative | Pros | Cons | Verdict |
+|---|---|---|---|
+| **Flip config default to True, keep D13 as opt-out** (chosen) | Realizes the D11 end-state the project has been building toward; MERGE/SUPERSEDE drive every page body; no code-path churn (only the config default moves); escape hatch preserved | Pages with claims lose LLM prose nuance the claims don't capture | ✅ |
+| Keep default off indefinitely | Zero behavior change | The whole compounding-ingest investment never becomes the default user experience | ❌ |
+| Flip the function-param defaults too (`ingest_source`, `_sync_claims_sections`) | One value everywhere | Loses the explicit-injection seam D20 chose; churns direct callers/tests for no behavioral gain (call sites already pass the config value) | ❌ |
+
+**Sub-decisions:**
+- **Only the config default moved.** Function-param defaults stay `False` (explicit-injection
+  style, D20) — live call sites already forward `settings.pipeline.body_from_claims`, so the
+  config flip is sufficient and minimal.
+- **Safety unchanged:** the no-active-claims guard in `render_page_body`/`_sync_claims_sections`
+  still keeps existing prose, so a down embedder or empty ledger can never wipe a page.
+
+**Revisit when:** users report lost prose nuance on claim-rendered pages → render claims *and*
+keep a compiled summary block (the D20 fallback), or fold the D13 section renderer into
+`render_page_body` as a single combined mode.

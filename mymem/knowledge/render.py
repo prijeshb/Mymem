@@ -51,6 +51,55 @@ def render_claims_section(claims: list[Claim]) -> str:
     return "\n".join(lines)
 
 
+def _dedup_preserving_order(items: list[str]) -> list[str]:
+    """Keep the first occurrence of each item, preserving order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+def render_page_body(
+    title: str,
+    claims: list[Claim],
+    *,
+    see_also: list[str] | None = None,
+) -> str:
+    """Render a complete wiki page body **from** its claims (ADR-015 D20 / D11 end-state).
+
+    The page becomes a deterministic view of the compounding ledger rather than re-compiled
+    LLM prose: an `# {title}` heading, active claims as confidence-tagged bullets, the
+    struck-through SUPERSEDE trail, and a preserved `## See Also` wikilink block so the
+    knowledge graph survives the switch.
+
+    Returns "" when there are no **active** claims — the caller keeps the existing prose,
+    so a down embedder or a superseded-only page is never wiped to an empty body.
+    """
+    active = [c for c in claims if c.valid_to is None]
+    if not active:
+        return ""
+    superseded = [c for c in claims if c.valid_to is not None]
+
+    lines = [f"# {title}", ""]
+    lines += [f"- {_flatten(c.text)} (conf {c.confidence:.1f})" for c in active]
+
+    if superseded:
+        lines += ["", "### Superseded", ""]
+        lines += [
+            f"- ~~{_flatten(c.text)}~~ (retired {c.valid_to})" for c in superseded
+        ]
+
+    links = _dedup_preserving_order(see_also or [])
+    if links:
+        lines += ["", "## See Also", ""]
+        lines += [f"- [[{link}]]" for link in links]
+
+    return "\n".join(lines)
+
+
 def sync_claims_section(body: str, claims: list[Claim]) -> str:
     """Return `body` with its Knowledge Claims section replaced by the one for `claims`.
 

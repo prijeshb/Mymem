@@ -73,6 +73,11 @@ class PipelineConfig(BaseSettings):
     index_on_compile: bool = True
     skip_unchanged: bool = True
     max_concepts: int = 3  # max wiki pages created per source (1 = one page per source)
+    # Default-on (ADR-015 D20 / D11 end-state): render each touched page's body FROM its
+    # compounding claims instead of appending a "Knowledge Claims" section to LLM prose.
+    # A page with no active claims keeps its existing prose (never wiped). Set False to
+    # fall back to the D13 "Knowledge Claims"-section behavior.
+    body_from_claims: bool = True
 
 
 # ---------------------------------------------------------------------------

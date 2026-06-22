@@ -25,23 +25,42 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 
-def _sync_claims_sections(db_path: Path, touched_pages: list[tuple[Path, str]]) -> None:
-    """Refresh each touched page's "Knowledge Claims" section from its current claims
-    (ADR-015 D13). Best-effort and idempotent — never raises into ingest. Writes with
-    stamp_updated=False so the page's real last-edited date (set during the compile loop)
-    is preserved.
+def _sync_claims_sections(
+    db_path: Path,
+    touched_pages: list[tuple[Path, str]],
+    *,
+    body_from_claims: bool = False,
+) -> None:
+    """Refresh each touched page from its current claims. Best-effort and idempotent —
+    never raises into ingest. Writes with stamp_updated=False so the page's real
+    last-edited date (set during the compile loop) is preserved.
+
+    Two modes:
+      - default (ADR-015 D13): append/replace a "Knowledge Claims" section, keeping the
+        LLM-compiled prose above it.
+      - body_from_claims (ADR-015 D20 / D11 end-state, opt-in): render the whole body FROM
+        the page's claims, dropping the LLM prose but preserving its See Also wikilinks so
+        the graph survives. A page with no active claims is left untouched (never wiped).
     """
     claims_db = db_path.parent / "claims.db"
     if not claims_db.exists():
         return
     try:
         from mymem.knowledge.claims import claims_for_page
-        from mymem.knowledge.render import sync_claims_section
+        from mymem.knowledge.render import render_page_body, sync_claims_section
 
         for page_path, page_id in touched_pages:
             try:
                 page = read_page(page_path)
-                new_body = sync_claims_section(page.body, claims_for_page(claims_db, page_id))
+                claims = claims_for_page(claims_db, page_id)
+                if body_from_claims:
+                    new_body = render_page_body(
+                        page.title, claims, see_also=page.wikilinks()
+                    )
+                    if not new_body:  # no active claims → keep existing prose (safety)
+                        continue
+                else:
+                    new_body = sync_claims_section(page.body, claims)
                 if new_body != page.body:
                     write_page(dataclasses.replace(page, body=new_body), stamp_updated=False)
             except Exception as exc:

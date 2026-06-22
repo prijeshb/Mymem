@@ -17,11 +17,12 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
 from mymem.graph.extractor import ExtractedEntity
-from mymem.graph.resolver import resolve_entities
+from mymem.graph.resolver import EmbedFn, resolve_entities
 from mymem.graph.store import (
     ENTITY_TYPES,
     add_alias,
@@ -72,16 +73,97 @@ class ClassifyReport:
     classified: int
 
 
-async def seed_from_wiki(db_path: Path, wiki_dir: Path) -> SeedReport:
-    """Tier-1 structural seed. Idempotent — see module docstring."""
+@dataclass(frozen=True)
+class RekeyReport:
+    """Result of a slug→id graph re-key pass (ADR-014 D4)."""
+    entities_rekeyed: int
+    mentions_rekeyed: int
+    unresolved: int   # distinct slug anchors with no matching page id (left as-is)
+
+
+def rekey_graph_page_ids(db_path: Path, wiki_dir: Path) -> RekeyReport:
+    """Convert legacy slug-valued page anchors to stable page ids (ADR-014 D4).
+
+    After the structural column rename (store._migrate_slug_to_id), existing
+    entities.page_id / mentions.page_id still hold *slugs*. Resolve each distinct
+    slug to its page's stable id via the wiki identity index and rewrite it.
+
+    Idempotent: a value that already is an id (or that resolves to itself) is left
+    untouched; a slug with no matching page is left as-is and counted as unresolved
+    (a tolerated dangling anchor, never deleted).
+    """
+    from mymem.wiki.identity import build_page_id_index, resolve_to_id
+
+    index = build_page_id_index(wiki_dir)
+    valid_ids = set(index.values())  # already-stable anchors — skip without counting
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    entities_rekeyed = 0
+    mentions_rekeyed = 0
+    unresolved_keys: set[str] = set()
+    try:
+        with conn:
+            for table in ("entities", "mentions"):
+                rows = conn.execute(
+                    f"SELECT DISTINCT page_id FROM {table} WHERE page_id IS NOT NULL"  # noqa: S608
+                ).fetchall()
+                for r in rows:
+                    old = r["page_id"]
+                    if old in valid_ids:
+                        continue  # already a stable id (idempotent re-run)
+                    new = resolve_to_id(index, old)
+                    if new is None:
+                        unresolved_keys.add(old)
+                        continue
+                    if new == old:
+                        continue
+                    cur = conn.execute(
+                        f"UPDATE {table} SET page_id = ? WHERE page_id = ?",  # noqa: S608
+                        (new, old),
+                    )
+                    if table == "entities":
+                        entities_rekeyed += cur.rowcount
+                    else:
+                        mentions_rekeyed += cur.rowcount
+    finally:
+        conn.close()
+
+    log.info(
+        "Graph slug→id re-key complete",
+        entities=entities_rekeyed, mentions=mentions_rekeyed, unresolved=len(unresolved_keys),
+    )
+    return RekeyReport(
+        entities_rekeyed=entities_rekeyed,
+        mentions_rekeyed=mentions_rekeyed,
+        unresolved=len(unresolved_keys),
+    )
+
+
+async def seed_from_wiki(
+    db_path: Path,
+    wiki_dir: Path,
+    *,
+    embed_fn: EmbedFn | None = None,
+    router: ModelRouter | None = None,
+) -> SeedReport:
+    """Tier-1 structural seed. Idempotent — see module docstring.
+
+    Resolution precision (opt-in): pass `embed_fn` to enable the embedding-cosine
+    tier and `router` to enable the LLM-judge tier when matching `[[wikilinks]]` to
+    existing pages. Both default to None → deterministic-only (exact + fuzzy),
+    keeping the seed zero-cost and offline. Supplying them reduces false-broken
+    links where a wikilink means an existing page but is worded differently.
+    """
     pages = list_pages(wiki_dir)
 
     delete_mentions_by_source(db_path, (SEED_SOURCE_LINKED, SEED_SOURCE_BROKEN))
 
     page_entities = 0
     for page in pages:
+        # Anchor entities on the page's stable id (ADR-013/014); fall back to the slug
+        # only for a (pre-ADR-013) page that has no id yet.
         upsert_entity(
-            db_path, page.title, entity_type=_DEFAULT_TYPE, page_slug=page.path.stem
+            db_path, page.title, entity_type=_DEFAULT_TYPE, page_id=page.id or page.path.stem
         )
         page_entities += 1
 
@@ -89,7 +171,7 @@ async def seed_from_wiki(db_path: Path, wiki_dir: Path) -> SeedReport:
     broken_created = 0
     total = 0
     for page in pages:
-        slug = page.path.stem
+        page_key = page.id or page.path.stem
         targets = page.wikilinks()
         if not targets:
             continue
@@ -97,22 +179,24 @@ async def seed_from_wiki(db_path: Path, wiki_dir: Path) -> SeedReport:
             ExtractedEntity(name=t, type=_DEFAULT_TYPE, description="", span="")
             for t in targets
         ]
-        resolutions = await resolve_entities(db_path, extracted)
+        resolutions = await resolve_entities(
+            db_path, extracted, embed_fn=embed_fn, router=router
+        )
         for target, resolution in zip(targets, resolutions, strict=True):
             if resolution.entity_id is not None:
                 entity = get_entity(db_path, resolution.entity_id)
-                has_page = entity is not None and entity.page_slug is not None
+                has_page = entity is not None and entity.page_id is not None
                 add_mention(
                     db_path,
                     resolution.entity_id,
-                    slug,
+                    page_key,
                     source_id=SEED_SOURCE_LINKED if has_page else SEED_SOURCE_BROKEN,
                 )
                 if has_page:
                     linked += 1
             else:
                 created = upsert_entity(db_path, target, entity_type=_DEFAULT_TYPE)
-                add_mention(db_path, created.id, slug, source_id=SEED_SOURCE_BROKEN)
+                add_mention(db_path, created.id, page_key, source_id=SEED_SOURCE_BROKEN)
                 broken_created += 1
             total += 1
 

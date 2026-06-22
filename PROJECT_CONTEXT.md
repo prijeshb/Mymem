@@ -8,6 +8,9 @@
 - Testing: pytest + pytest-asyncio + pytest-cov (≥ 80% required)
 
 ## Current Branch
+- `V1-0012` — broken-link handling: opt-in semantic seed resolution + ranked knowledge gaps
+  (ADR-008 D12). Stacked on V1-0011 (carries body-from-claims default + graph re-key).
+- `V1-0011` — render page body FROM claims (ADR-015 D20/D21) + graph re-key slug→id (ADR-014 D6).
 - `V1-0010` — compounding ingest (ADR-011) + graph re-key. master is at the full project + README.
 
 ## Architecture Decisions
@@ -29,6 +32,7 @@
 | ADR-013 | Stable page identity (opaque ULID `id` vs slug vs title; resolution + redirects) — prerequisite for ADR-011 | Accepted |
 | ADR-014 | Page identity implementation decisions (mint_id home, auto-mint choke point, exact resolution, scope fence) | Accepted |
 | ADR-015 | Compounding ingest implementation decisions (Phase 1: span grounding substring+fuzzy, blank-not-drop, persist in Phase 2) | Accepted |
+| ADR-016 | Open Knowledge Format (OKF) integration (two-way interchange via export adapter + import reader; not native storage) | Proposed |
 
 ## Completed Features
 
@@ -63,6 +67,11 @@
 | Decision-agreement eval / ship gate (P3 D15) | `mymem/evals/decision_agreement.py` | DONE — 100% cov, ADR-015 D15-D16 |
 | Decision-eval live capture + background wiring (P3 D17) | `mymem/pipeline/compounding.py`, `ingest.py`, `evals/decision_agreement.py` | DONE — ADR-015 D17 |
 | Cross-page claim retrieval — global vec index (D19) | `mymem/knowledge/claim_index.py`, `retrieval.py`, `compounding.py`, `cli.py` | DONE — 100% cov, ADR-015 D19 |
+| Render page body FROM claims (opt-in, D11 end-state) | `mymem/knowledge/render.py`, `ingest_claims.py`, `config.py` | DONE — render.py 100% cov, ADR-015 D20 |
+| Render body FROM claims now **default-on** | `mymem/config.py` | DONE — ADR-015 D21 (opt-out via `pipeline.body_from_claims: false`) |
+| Graph re-key slug→id (stable `page_id` anchors) | `mymem/graph/store.py`, `backfill.py`, `ingest_background.py`, `web/routes/api.py`, `cli.py` | DONE — ADR-014 D6; auto migration + `mymem graph rekey` |
+| Broken-link precision: opt-in semantic seed resolution | `mymem/graph/backfill.py`, `cli.py` | DONE — ADR-008 D12; `backfill --semantic`/`--judge` (default deterministic) |
+| Knowledge gaps: ranked referenced-but-unwritten concepts | `mymem/graph/gaps.py`, `cli.py`, `web/routes/api.py` | DONE — ADR-008 D12; `mymem graph gaps` + `GET /api/graph/gaps`; gaps.py 100% cov |
 
 ## Security Status
 - **Last Audit**: 2026-06-11
@@ -87,8 +96,8 @@
   - Fixed: re-ingest (`ingest.py`) and daily re-run (`introspect.py`) preserve the existing id
     instead of minting a new one — id is now stable across re-compilation. Regression test added.
   - Tests: 23 identity/regression tests, identity.py 100% cov; full suite 747 passed / 1 skipped.
-  - Next in branch: ADR-011 Phase 1 (propositions) OR graph re-key slug→id (deferred — no rename
-    surface yet, doesn't block claims). Deferred (ADR-014 D4): rename redirects; fuzzy wikilink→id.
+  - Graph re-key slug→id (ADR-014 D4): DONE in V1-0011 — see ADR-014 D6. Still deferred
+    (ADR-014 D4): rename redirects; fuzzy wikilink→id (await a page-rename surface).
   (store/extractor/resolver/backfill, `mymem graph backfill|stats` CLI, ingest hook,
   delete/archive cleanup); next: Phase 2 (lint unlinked mentions) + Phase 3 (retrieval RRF)
 - [ ] Social source readers + free-tier routing — branch V1-0008 — status: develop (ADR-009, ADR-010)
@@ -135,7 +144,17 @@
     `compounding` embeds each prop once, retrieves globally, and keeps the index in sync (index
     ADD/SUPERSEDE, de-index superseded); `backfill_claim_index` + `mymem claims backfill-index` CLI.
     100% cov on new modules. ADR-015 D19.
-  - Next: render body FROM claims (D11 end-state); graph re-key slug→id.
+  - D11 end-state DONE (opt-in): `pipeline.body_from_claims` flag → `render_page_body` renders
+    each touched page's body FROM its active claims (confidence bullets + struck-through
+    SUPERSEDE trail + preserved `## See Also` wikilinks so the graph survives) instead of
+    appending the D13 section. Default off (byte-identical to D13); no-active-claims guard
+    never wipes prose; flag injected through `ingest_source` → CLI + all 3 API call sites.
+    render.py 100% cov. ADR-015 D20. (Branch V1-0011.)
+  - DONE (V1-0011): `body_from_claims` is now the **default** (ADR-015 D21); the D13 section
+    mode is opt-out via `pipeline.body_from_claims: false`.
+  - DONE (V1-0011): **graph re-key slug→id** (ADR-014 D6) — `graph/store.py` anchors pages on the
+    stable ULID `page_id`; callers pass `page.id`; auto structural migration + `mymem graph rekey`
+    value migration. Live `data/graph.db`: run `mymem graph rekey` once to convert existing anchors.
   - Research: docs/research/knowledge-moat-and-free-tier-routing.md · PRD: docs/PRD/compounding-ingest.md
   - Architecture: docs/architecture/compounding-ingest.md · ADR-011 · claims key off stable `page_id`
   - Converts ingest from overwrite-by-slug (`ingest.py:315`) to atomic propositions (with verbatim
@@ -158,6 +177,22 @@
   - Evals: entity consensus + span-grounding; KGQAGen-style multi-hop A/B; ship gates:
     multi-hop recall up, single-hop no regression, ingest cost < +20%
   - NOT building: community detection/summaries (ADR-007)
+- [ ] Open Knowledge Format (OKF) integration — priority: P2 — ADR-016
+  - Two-way interchange with Google Cloud's OKF v0.1 (markdown + frontmatter, one file/concept).
+    MyMem's wiki is ~85% OKF-shaped already; this is an adapter, not a storage refactor.
+  - Export: `mymem export okf <dir>` — pure transform over `list_pages()`; `domain`→`type`,
+    `updated`→ISO `timestamp`, summary→`description`, `[[wikilinks]]`→`/slug.md` markdown links;
+    preserves `id`/`domain`/`sources` as extension keys; emits OKF `index.md` + `log.md`.
+  - Import: `OkfSourceReader` (Strategy, `pipeline/readers.py`) + `--type okf` → concepts flow
+    through normal ingest; OKF links → wikilinks; unknown `type`→`domain` (default `misc`).
+  - New `mymem/knowledge/okf/` (`_spec`, `_map`, `_links`, `exporter`, `conformance`). No new deps.
+  - Ship gates: 100% conformance on export, identity-stable round-trip (ULID preserved),
+    ≥95% wikilink resolution on the live 144-page wiki.
+  - Research: docs/research/open-knowledge-format.md · PRD: docs/PRD/okf-integration.md
+  - Architecture: docs/architecture/okf-integration.md
+- [ ] Knowledge-gap follow-ups (ADR-008 D12 revisit) — feed top gaps into introspect ambient
+  recommendations; optional stub-page creation / auto-research action; merge a pageless entity
+  into a page entity when semantically equivalent (so `--semantic` retro-fixes an existing graph)
 - [ ] Human review track for extraction eval (`mymem/evals/review.py`, `mymem eval --review`)
 - [ ] Wire extraction consensus into `EvalReport` (`runner.py` surfaces consensus results)
 - [ ] Ontology layer — typed relationships (is-a, part-of, contradicts, etc.)
@@ -174,4 +209,4 @@
 - Extraction consensus PASS rate on ingested articles (3 runs recorded: 2× WARN, 1× PASS)
 - Mean duplicate concept pairs per ingest (target: near 0 after dedup)
 - Wiki page coverage: ideas from full document via map-reduce (no longer limited to 6000 chars)
-- Test suite: 861 passing / 1 skipped as of 2026-06-16 (compounding ingest Phases 1-3 + wiki claims section + decision-agreement eval + cross-page vector retrieval)
+- Test suite: 919 passing / 1 skipped as of 2026-06-22 (adds V1-0012 broken-link handling: opt-in semantic seed resolution + knowledge-gap ranking core/CLI/API, gaps.py 100% cov)

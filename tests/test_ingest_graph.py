@@ -95,9 +95,12 @@ class TestGraphIngestHook:
         assert graph_db.exists()
         e = find_entity(graph_db, "Alpha Systems")
         assert e is not None and e.type == "system"
-        ents = entities_for_page(graph_db, "concept-alpha")
+        # Mentions are anchored on the page's stable id (ADR-013/014), not its slug.
+        from mymem.wiki.page import read_page
+        page_id = read_page(env["wiki_dir"] / "concept-alpha.md").id
+        ents = entities_for_page(graph_db, page_id)
         assert any(x.canonical == "Alpha Systems" for x in ents)
-        ms = mentions_for_page(graph_db, "concept-alpha")
+        ms = mentions_for_page(graph_db, page_id)
         assert ms and ms[0].span == "about Alpha Systems"
 
     @pytest.mark.asyncio

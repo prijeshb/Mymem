@@ -177,6 +177,7 @@ async def ingest_source(
     title_hint: str | None = None,
     max_concepts: int = 3,
     db_path: Path | None = None,
+    body_from_claims: bool = False,
 ) -> IngestResult:
     """
     Ingest a source document into the wiki.
@@ -191,6 +192,8 @@ async def ingest_source(
         tags:        Optional tag override list.
         domain:      Optional domain override string.
         title_hint:  Optional page title override.
+        body_from_claims: Render each touched page's body FROM its claims instead of
+                     appending a section (ADR-015 D20). Opt-in via pipeline config.
     """
     run_id = set_run_id()
     source_name = Path(source).name if not source.startswith("http") else source
@@ -355,8 +358,9 @@ async def ingest_source(
         applied_decisions = await _persist_claims(
             db_path, source_name, claim_records, router=router
         )
-        # 4c. Surface the resulting claims (incl. SUPERSEDE trail) in the wiki (ADR-015 D13).
-        _sync_claims_sections(db_path, touched_pages)
+        # 4c. Surface the resulting claims in the wiki — either as an appended section
+        # (ADR-015 D13) or as the whole body when body_from_claims is on (D20 / D11).
+        _sync_claims_sections(db_path, touched_pages, body_from_claims=body_from_claims)
 
     # 5. Log the ingest operation
     all_touched = result.pages_written + result.pages_updated
@@ -415,7 +419,7 @@ async def ingest_source(
             _graph_extract_background(
                 source_name=source_name,
                 source_text=source_text,
-                page_titles=list(all_touched),
+                page_ids=[pid for _, pid in touched_pages],
                 router=router,
                 db_path=db_path,
             )

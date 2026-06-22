@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS entities (
     canonical   TEXT NOT NULL,
     type        TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    page_slug   TEXT,
+    page_id   TEXT,
     created     TEXT NOT NULL,
     updated     TEXT NOT NULL
 );
@@ -39,12 +39,12 @@ CREATE TABLE IF NOT EXISTS aliases (
 CREATE TABLE IF NOT EXISTS mentions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     entity_id   INTEGER NOT NULL REFERENCES entities(id),
-    page_slug   TEXT NOT NULL,
+    page_id   TEXT NOT NULL,
     span        TEXT NOT NULL DEFAULT '',
     source_id   TEXT NOT NULL DEFAULT '',
     created     TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_mentions_page   ON mentions(page_slug);
+CREATE INDEX IF NOT EXISTS idx_mentions_page   ON mentions(page_id);
 CREATE INDEX IF NOT EXISTS idx_mentions_entity ON mentions(entity_id);
 """
 
@@ -55,7 +55,7 @@ class Entity:
     canonical: str
     type: str
     description: str
-    page_slug: str | None
+    page_id: str | None
     created: str
     updated: str
     aliases: tuple[str, ...] = ()
@@ -64,7 +64,7 @@ class Entity:
 @dataclass(frozen=True)
 class Mention:
     entity_id: int
-    page_slug: str
+    page_id: str
     span: str
     source_id: str
     created: str
@@ -100,11 +100,28 @@ def _validate_type(entity_type: str) -> None:
         )
 
 
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()  # noqa: S608 — table is a literal
+    return any(r["name"] == column for r in rows)
+
+
+def _migrate_slug_to_id(conn: sqlite3.Connection) -> None:
+    """Structural migration (ADR-014 D4): rename the legacy `page_slug` column to
+    `page_id` on pre-rekey databases. Idempotent — a no-op once renamed. Values are
+    still slugs after this rename; `rekey_graph_page_ids()` converts them to stable ids.
+    """
+    for table in ("entities", "mentions"):
+        if _has_column(conn, table, "page_slug") and not _has_column(conn, table, "page_id"):
+            conn.execute(f"ALTER TABLE {table} RENAME COLUMN page_slug TO page_id")  # noqa: S608
+
+
 def init_db(db_path: Path) -> None:
-    """Create graph tables if they don't exist. Idempotent."""
+    """Create graph tables if they don't exist, then migrate legacy columns. Idempotent."""
     conn = _connect(db_path)
     try:
         with conn:
+            # Migrate legacy tables first so the schema's page_id index can be created.
+            _migrate_slug_to_id(conn)
             conn.executescript(_SCHEMA)
     finally:
         conn.close()
@@ -119,7 +136,7 @@ def _row_to_entity(conn: sqlite3.Connection, row: sqlite3.Row) -> Entity:
         canonical=row["canonical"],
         type=row["type"],
         description=row["description"],
-        page_slug=row["page_slug"],
+        page_id=row["page_id"],
         created=row["created"],
         updated=row["updated"],
         aliases=tuple(r["alias"] for r in alias_rows),
@@ -132,10 +149,10 @@ def upsert_entity(
     *,
     entity_type: str,
     description: str = "",
-    page_slug: str | None = None,
+    page_id: str | None = None,
 ) -> Entity:
     """Insert an entity, or update the existing one with the same canonical name
-    (case-insensitive). Empty description/page_slug never overwrite existing values."""
+    (case-insensitive). Empty description/page_id never overwrite existing values."""
     _validate_type(entity_type)
     canonical = _normalize(canonical)
     if not canonical:
@@ -150,18 +167,18 @@ def upsert_entity(
             if existing is None:
                 cur = conn.execute(
                     "INSERT INTO entities"
-                    " (canonical, type, description, page_slug, created, updated)"
+                    " (canonical, type, description, page_id, created, updated)"
                     " VALUES (?,?,?,?,?,?)",
-                    (canonical, entity_type, description, page_slug, _now(), _now()),
+                    (canonical, entity_type, description, page_id, _now(), _now()),
                 )
                 entity_id = int(cur.lastrowid or 0)
             else:
                 entity_id = existing["id"]
                 conn.execute(
-                    "UPDATE entities SET description = ?, page_slug = ?, updated = ? WHERE id = ?",
+                    "UPDATE entities SET description = ?, page_id = ?, updated = ? WHERE id = ?",
                     (
                         description or existing["description"],
-                        page_slug if page_slug is not None else existing["page_slug"],
+                        page_id if page_id is not None else existing["page_id"],
                         _now(),
                         entity_id,
                     ),
@@ -281,7 +298,7 @@ def delete_mentions_by_source(db_path: Path, source_ids: tuple[str, ...]) -> int
 def add_mention(
     db_path: Path,
     entity_id: int,
-    page_slug: str,
+    page_id: str,
     *,
     span: str = "",
     source_id: str = "",
@@ -291,34 +308,34 @@ def add_mention(
         with conn:
             _require_entity(conn, entity_id)
             conn.execute(
-                "INSERT INTO mentions (entity_id, page_slug, span, source_id, created)"
+                "INSERT INTO mentions (entity_id, page_id, span, source_id, created)"
                 " VALUES (?,?,?,?,?)",
-                (entity_id, page_slug, span, source_id, _now()),
+                (entity_id, page_id, span, source_id, _now()),
             )
     finally:
         conn.close()
 
 
-def mentions_for_page(db_path: Path, page_slug: str) -> list[Mention]:
+def mentions_for_page(db_path: Path, page_id: str) -> list[Mention]:
     conn = _connect(db_path)
     try:
         rows = conn.execute(
-            "SELECT entity_id, page_slug, span, source_id, created"
-            " FROM mentions WHERE page_slug = ? ORDER BY id",
-            (page_slug,),
+            "SELECT entity_id, page_id, span, source_id, created"
+            " FROM mentions WHERE page_id = ? ORDER BY id",
+            (page_id,),
         ).fetchall()
         return [Mention(**dict(r)) for r in rows]
     finally:
         conn.close()
 
 
-def entities_for_page(db_path: Path, page_slug: str) -> list[Entity]:
+def entities_for_page(db_path: Path, page_id: str) -> list[Entity]:
     conn = _connect(db_path)
     try:
         rows = conn.execute(
             "SELECT DISTINCT e.* FROM entities e JOIN mentions m ON m.entity_id = e.id"
-            " WHERE m.page_slug = ? ORDER BY e.canonical",
-            (page_slug,),
+            " WHERE m.page_id = ? ORDER BY e.canonical",
+            (page_id,),
         ).fetchall()
         return [_row_to_entity(conn, r) for r in rows]
     finally:
@@ -329,19 +346,19 @@ def pages_for_entity(db_path: Path, entity_id: int) -> list[str]:
     conn = _connect(db_path)
     try:
         rows = conn.execute(
-            "SELECT DISTINCT page_slug FROM mentions WHERE entity_id = ? ORDER BY page_slug",
+            "SELECT DISTINCT page_id FROM mentions WHERE entity_id = ? ORDER BY page_id",
             (entity_id,),
         ).fetchall()
-        return [r["page_slug"] for r in rows]
+        return [r["page_id"] for r in rows]
     finally:
         conn.close()
 
 
-def delete_page(db_path: Path, page_slug: str) -> int:
+def delete_page(db_path: Path, page_id: str) -> int:
     """Remove all graph anchorage of a deleted/archived wiki page.
 
     1. Delete its mentions.
-    2. Clear page_slug on the entity whose page this was.
+    2. Clear page_id on the entity whose page this was.
     3. Prune entities left with no mentions and no page (and their aliases).
 
     Returns the number of mentions removed. Idempotent.
@@ -349,17 +366,17 @@ def delete_page(db_path: Path, page_slug: str) -> int:
     conn = _connect(db_path)
     try:
         with conn:
-            cur = conn.execute("DELETE FROM mentions WHERE page_slug = ?", (page_slug,))
+            cur = conn.execute("DELETE FROM mentions WHERE page_id = ?", (page_id,))
             removed = cur.rowcount
             conn.execute(
-                "UPDATE entities SET page_slug = NULL, updated = ? WHERE page_slug = ?",
-                (_now(), page_slug),
+                "UPDATE entities SET page_id = NULL, updated = ? WHERE page_id = ?",
+                (_now(), page_id),
             )
             orphan_ids = [
                 r["id"]
                 for r in conn.execute(
                     "SELECT e.id FROM entities e"
-                    " WHERE e.page_slug IS NULL"
+                    " WHERE e.page_id IS NULL"
                     " AND NOT EXISTS (SELECT 1 FROM mentions m WHERE m.entity_id = e.id)"
                 ).fetchall()
             ]
@@ -368,7 +385,7 @@ def delete_page(db_path: Path, page_slug: str) -> int:
                 marks = ",".join("?" * len(orphan_ids))
                 conn.execute(f"DELETE FROM aliases WHERE entity_id IN ({marks})", orphan_ids)  # noqa: S608
                 conn.execute(f"DELETE FROM entities WHERE id IN ({marks})", orphan_ids)  # noqa: S608
-                log.info("Pruned orphan entities", count=len(orphan_ids), page=page_slug)
+                log.info("Pruned orphan entities", count=len(orphan_ids), page=page_id)
         return removed
     finally:
         conn.close()
@@ -382,7 +399,7 @@ def stats(db_path: Path) -> GraphStats:
         total_mentions = conn.execute("SELECT COUNT(*) FROM mentions").fetchone()[0]
         singleton_count = conn.execute(
             "SELECT COUNT(*) FROM entities e WHERE"
-            " (SELECT COUNT(DISTINCT page_slug) FROM mentions m WHERE m.entity_id = e.id) <= 1"
+            " (SELECT COUNT(DISTINCT page_id) FROM mentions m WHERE m.entity_id = e.id) <= 1"
         ).fetchone()[0]
         rate = singleton_count / total_entities if total_entities else 0.0
         return GraphStats(

@@ -36,9 +36,8 @@ wiki/daily/
 wiki.bak/
 wiki.bak*/
 
-# Outputs
-outputs/charts/
-outputs/slides/
+# Outputs (generated artifacts — charts, slides, browser test output, etc.)
+outputs/
 
 # Logs
 *.log

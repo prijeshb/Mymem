@@ -181,6 +181,43 @@ from one tuple (`ENTITY_TYPES`); invalid types from any LLM are skipped, never s
 
 ---
 
+## D12. Broken links: surface as ranked knowledge gaps; opt-in semantic resolution (V1-0012)
+
+**Context:** a live seed produced 360 "broken-link" entities. Analysis showed ~96% (312/325)
+are *genuine content gaps* (concepts wikilinked but never written) and only ~13 are borderline
+(fuzzy 70–92) where a real page exists under different wording. So "fixing broken links" splits
+into two unrelated problems.
+
+**Chosen (Part A — precision):** keep seed deterministic-only **by default**; add opt-in
+`embed_fn`/`router` params to `seed_from_wiki` (`backfill.py`) forwarded to the existing resolver
+tiers, exposed as `mymem graph backfill --semantic` / `--judge`. Recovers the ~13 worded-
+differently links without making the default seed online/costly.
+
+**Chosen (Part B — gaps):** new pure `mymem/graph/gaps.py` (`knowledge_gaps`, `gap_count`)
+ranking pageless entities by **distinct inbound page references**; exposed as `mymem graph gaps`
+and `GET /api/graph/gaps`. Turns broken links from noise into a prioritized "write these pages
+next" list. Self-heals: writing a top gap and re-seeding upgrades the entity (sets `page_id`) and
+the links resolve as linked.
+
+| Alternative | Pros | Cons | Verdict |
+|---|---|---|---|
+| **Deterministic default + opt-in semantic + gap ranking** (chosen) | Default seed stays zero-cost/offline; recovers real false-broken on demand; genuine gaps become actionable; pure/100%-tested gaps module | `--semantic` doesn't retro-fix an already-seeded graph (see limitation) | ✅ |
+| Make semantic resolution the seed default | Fewer broken on first run | Pulls embedder/LLM into every seed; breaks the zero-cost guarantee (D-cross-cutting #2) | ❌ |
+| Lower the fuzzy accept threshold instead | No new tiers | Measured: 0 links matchable at exact/≥92 are being missed — lowering only adds false *positives* | ❌ |
+| Auto-create stub pages for gaps | "Fixes" the count | Pollutes the wiki with empty pages; gaps are better as suggestions | ❌ (deferred) |
+
+**Known limitation (recorded):** `--semantic`/`--judge` only help on a **fresh** seed. On an
+already-seeded graph a broken link `[[X]]` exact-matches the pageless entity "X" it previously
+created, so the exact tier wins before the semantic tier runs. To benefit on the existing graph:
+delete `data/graph.db` and re-run `backfill --semantic`, **or** add the equivalent surface form as
+an alias via `backfill --classify` (then the exact/alias tier links it). A future enhancement
+could merge a pageless entity into a page entity when they're found semantically equivalent.
+
+**Revisit when:** gaps want actions (stub creation / auto-research), or pageless↔page semantic
+merge becomes worth building; fold the gap signal into introspect's ambient recommendations.
+
+---
+
 ## Cross-cutting rationale
 
 Three rules drove nearly every call above:

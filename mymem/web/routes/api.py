@@ -293,6 +293,36 @@ async def api_graph(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/graph/gaps  — referenced-but-unwritten concepts, ranked
+# ---------------------------------------------------------------------------
+
+@router.get("/graph/gaps")
+async def api_graph_gaps(request: Request, limit: int = 50) -> JSONResponse:
+    from mymem.graph.gaps import gap_count, knowledge_gaps
+
+    graph_db: Path = request.app.state.db_path.parent / "graph.db"
+    gaps = knowledge_gaps(graph_db, limit=limit)
+
+    wiki_dir = request.app.state.wiki_dir
+    id_to_title = {p.id: p.title for p in list_pages(wiki_dir) if p.id}
+
+    return JSONResponse({
+        "total": gap_count(graph_db),
+        "gaps": [
+            {
+                "concept": g.concept,
+                "inbound_refs": g.inbound_refs,
+                "linked_from": [
+                    {"id": pid, "title": id_to_title.get(pid)}
+                    for pid in g.sample_page_ids
+                ],
+            }
+            for g in gaps
+        ],
+    })
+
+
+# ---------------------------------------------------------------------------
 # POST /api/ingest
 # ---------------------------------------------------------------------------
 
@@ -315,6 +345,7 @@ async def api_ingest(req: IngestRequest, request: Request) -> JSONResponse:
             domain=req.domain,
             max_concepts=req.max_concepts if req.max_concepts is not None else request.app.state.settings.pipeline.max_concepts,
             db_path=request.app.state.db_path,
+            body_from_claims=request.app.state.settings.pipeline.body_from_claims,
         )
         return JSONResponse({
             "skipped":       result.skipped,
@@ -392,6 +423,7 @@ async def api_upload(
             domain=domain,
             max_concepts=max_concepts if max_concepts is not None else settings.pipeline.max_concepts,
             db_path=request.app.state.db_path,
+            body_from_claims=settings.pipeline.body_from_claims,
         )
     except HTTPException:
         raise
@@ -445,6 +477,7 @@ async def api_ingest_text(req: IngestTextRequest, request: Request) -> JSONRespo
             domain=req.domain,
             max_concepts=req.max_concepts if req.max_concepts is not None else request.app.state.settings.pipeline.max_concepts,
             db_path=request.app.state.db_path,
+            body_from_claims=request.app.state.settings.pipeline.body_from_claims,
         )
     except HTTPException:
         raise
@@ -592,20 +625,23 @@ async def api_page_update(slug: str, req: PageUpdateRequest, request: Request) -
 # DELETE /api/page/{slug}
 # ---------------------------------------------------------------------------
 
-def _graph_cleanup(request: Request, slug: str) -> None:
+def _graph_cleanup(request: Request, page_id: str) -> None:
     """Remove a deleted/archived page's mentions from the entity graph.
 
-    Best-effort: graph cleanup must never block or fail the page operation.
+    Anchored on the page's stable id (ADR-013/014). Best-effort: graph cleanup
+    must never block or fail the page operation.
     """
+    if not page_id:
+        return
     try:
         from mymem.graph.store import delete_page as graph_delete_page
 
         graph_db: Path = request.app.state.db_path.parent / "graph.db"
         if graph_db.exists():
-            removed = graph_delete_page(graph_db, slug)
-            log.info("Graph cleanup", page=slug, mentions_removed=removed)
+            removed = graph_delete_page(graph_db, page_id)
+            log.info("Graph cleanup", page=page_id, mentions_removed=removed)
     except Exception as exc:
-        log.warning("Graph cleanup failed", page=slug, error=str(exc))
+        log.warning("Graph cleanup failed", page=page_id, error=str(exc))
 
 
 @router.delete("/page/{slug:path}")
@@ -628,7 +664,7 @@ async def api_page_delete(slug: str, request: Request) -> JSONResponse:
     if index_path.exists():
         IndexManager(index_path).remove(page.title)
 
-    _graph_cleanup(request, slug)
+    _graph_cleanup(request, page.id)
 
     return JSONResponse({"ok": True, "deleted": slug})
 
@@ -661,7 +697,7 @@ async def api_page_archive(slug: str, request: Request) -> JSONResponse:
     if index_path.exists():
         IndexManager(index_path).remove(page.title)
 
-    _graph_cleanup(request, slug)
+    _graph_cleanup(request, page.id)
 
     return JSONResponse({"ok": True, "archived": True})
 

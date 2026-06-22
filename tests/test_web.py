@@ -807,43 +807,78 @@ class TestEvalsRun:
 # ---------------------------------------------------------------------------
 
 class TestGraphCleanupHooks:
-    def _seed_graph(self, tmp_path: Path, slug: str) -> Path:
+    def _seed_graph(self, tmp_path: Path, page_id: str) -> Path:
         from mymem.graph.store import add_mention, init_db, upsert_entity
 
         graph_db = tmp_path / "data" / "graph.db"
         init_db(graph_db)
         e = upsert_entity(graph_db, "Some Entity", entity_type="concept")
-        add_mention(graph_db, e.id, slug, source_id="ingest")
+        add_mention(graph_db, e.id, page_id, source_id="ingest")
         return graph_db
 
     def test_delete_page_cleans_graph_mentions(
         self, client: TestClient, wiki_dir: Path, tmp_path: Path
     ) -> None:
         from mymem.graph.store import mentions_for_page
-        from mymem.wiki.page import write_page
+        from mymem.wiki.page import read_page, write_page
 
         page = _make_page("Doomed Page")
         page = __import__("dataclasses").replace(page, path=wiki_dir / page.path)
         write_page(page)
-        graph_db = self._seed_graph(tmp_path, "doomed-page")
+        # Graph anchors on the page's stable id (ADR-013/014), not its slug.
+        page_id = read_page(wiki_dir / "doomed-page.md").id
+        graph_db = self._seed_graph(tmp_path, page_id)
         client.app.state.db_path = tmp_path / "data" / "mymem.db"
 
         resp = client.delete("/api/page/doomed-page")
         assert resp.status_code == 200
-        assert mentions_for_page(graph_db, "doomed-page") == []
+        assert mentions_for_page(graph_db, page_id) == []
 
     def test_archive_page_cleans_graph_mentions(
         self, client: TestClient, wiki_dir: Path, tmp_path: Path
     ) -> None:
         from mymem.graph.store import mentions_for_page
-        from mymem.wiki.page import write_page
+        from mymem.wiki.page import read_page, write_page
 
         page = _make_page("Shelved Page")
         page = __import__("dataclasses").replace(page, path=wiki_dir / page.path)
         write_page(page)
-        graph_db = self._seed_graph(tmp_path, "shelved-page")
+        page_id = read_page(wiki_dir / "shelved-page.md").id
+        graph_db = self._seed_graph(tmp_path, page_id)
         client.app.state.db_path = tmp_path / "data" / "mymem.db"
 
         resp = client.post("/api/page/shelved-page/archive")
         assert resp.status_code == 200
-        assert mentions_for_page(graph_db, "shelved-page") == []
+        assert mentions_for_page(graph_db, page_id) == []
+
+
+class TestGraphGapsEndpoint:
+    def test_gaps_endpoint_returns_ranked_gaps(
+        self, client: TestClient, wiki_dir: Path, tmp_path: Path
+    ) -> None:
+        from mymem.graph.store import add_mention, init_db, upsert_entity
+
+        graph_db = tmp_path / "data" / "graph.db"
+        init_db(graph_db)
+        g1 = upsert_entity(graph_db, "AI Agents", entity_type="concept")  # pageless
+        g2 = upsert_entity(graph_db, "Microservices", entity_type="concept")
+        for pid in ("p1", "p2"):
+            add_mention(graph_db, g1.id, pid)
+        add_mention(graph_db, g2.id, "p1")
+        client.app.state.db_path = tmp_path / "data" / "mymem.db"
+
+        resp = client.get("/api/graph/gaps")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 2
+        assert data["gaps"][0]["concept"] == "AI Agents"
+        assert data["gaps"][0]["inbound_refs"] == 2
+        assert "linked_from" in data["gaps"][0]
+
+    def test_gaps_endpoint_empty_graph(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        client.app.state.db_path = tmp_path / "data" / "mymem.db"
+        resp = client.get("/api/graph/gaps")
+        assert resp.status_code == 200
+        assert resp.json() == {"total": 0, "gaps": []}

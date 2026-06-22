@@ -23,7 +23,7 @@ app          = typer.Typer(name="mymem", help="Personal LLM-powered knowledge ba
 obsidian_app = typer.Typer(name="obsidian", help="Obsidian vault integration.")
 graph_app    = typer.Typer(name="graph", help="Entity graph operations (ADR-007).")
 pages_app    = typer.Typer(name="pages", help="Wiki page identity operations (ADR-013).")
-claims_app   = typer.Typer(name="claims", help="Compounding claims ledger operations (ADR-011/015).")
+claims_app   = typer.Typer(name="claims", help="Compounding claims ledger ops (ADR-011/015).")
 app.add_typer(obsidian_app, name="obsidian")
 app.add_typer(graph_app, name="graph")
 app.add_typer(pages_app, name="pages")
@@ -118,6 +118,7 @@ def ingest(
             source_type=source_type,
             tags=tag_list,
             domain=domain,
+            body_from_claims=settings.pipeline.body_from_claims,
         ))
         prog.update(task, completed=True)
 
@@ -350,10 +351,17 @@ def graph_backfill(
         help="Also run Tier-2 LLM classification (types + aliases)"),
     limit: int = typer.Option(0, "--limit",
         help="Cap Tier-2 candidates per run (0 = no cap)"),
+    semantic: bool = typer.Option(False, "--semantic",
+        help="Match wikilinks to pages by embedding similarity (fewer false-broken; needs Ollama)"),
+    judge: bool = typer.Option(False, "--judge",
+        help="Use an LLM judge for borderline wikilink→page matches (extra LLM calls)"),
 ) -> None:
     """Migrate the existing wiki into the entity graph (Tier 1 + optional Tier 2).
 
     Tier 1 is structural and idempotent — safe to re-run any time as repair.
+    By default link resolution is deterministic-only (exact + fuzzy). Add
+    --semantic and/or --judge to also resolve worded-differently wikilinks to
+    existing pages instead of recording them as broken links.
     """
     settings = _get_settings()
     wiki_dir, *_ = _paths(settings)
@@ -363,7 +371,14 @@ def graph_backfill(
     from mymem.graph.store import init_db
 
     init_db(graph_db)
-    report = _run(seed_from_wiki(graph_db, wiki_dir))
+
+    embed_fn = None
+    if semantic:
+        from mymem.rag.embedder import OllamaEmbedder
+        embed_fn = OllamaEmbedder(base_url=settings.ollama.base_url).embed
+    seed_router = _make_router(settings) if judge else None
+
+    report = _run(seed_from_wiki(graph_db, wiki_dir, embed_fn=embed_fn, router=seed_router))
 
     table = Table(title="Tier-1 Structural Seed", show_lines=False)
     table.add_column("Metric", style="cyan")
@@ -425,6 +440,94 @@ def claims_backfill_index() -> None:
     embedder = OllamaEmbedder(base_url=settings.ollama.base_url)
     indexed = _run(backfill_claim_index(claims_db, embedder))
     console.print(f"[green]Indexed {indexed} claim(s) into the vector index.[/]")
+
+
+@graph_app.command("rekey")
+def graph_rekey() -> None:
+    """Re-key graph page anchors from slug to stable id (ADR-014 D4).
+
+    Runs the structural column migration (page_slug → page_id) then converts any
+    legacy slug values to the page's stable id via the wiki identity index.
+    Idempotent — safe to re-run any time.
+    """
+    settings = _get_settings()
+    wiki_dir, *_ = _paths(settings)
+    graph_db = _graph_db_path(settings)
+
+    if not graph_db.exists():
+        console.print("[dim]No graph database yet. Run `mymem graph backfill` first.[/]")
+        return
+
+    from mymem.graph.backfill import rekey_graph_page_ids
+    from mymem.graph.store import init_db
+    from mymem.graph.store import stats as graph_store_stats
+
+    init_db(graph_db)  # applies the structural page_slug → page_id rename
+    report = rekey_graph_page_ids(graph_db, wiki_dir)
+
+    table = Table(title="Graph Re-key (slug → id)", show_lines=False)
+    table.add_column("Metric", style="cyan")
+    table.add_column("Count", justify="right")
+    table.add_row("Entities re-keyed", str(report.entities_rekeyed))
+    table.add_row("Mentions re-keyed", str(report.mentions_rekeyed))
+    table.add_row("Unresolved anchors (left as-is)", str(report.unresolved))
+    console.print(table)
+
+    # A bare 0/0/0 reads like failure — say what it actually means.
+    if report.entities_rekeyed == 0 and report.mentions_rekeyed == 0:
+        total = graph_store_stats(graph_db).total_entities
+        if total == 0:
+            console.print("[dim]Graph is empty — run `mymem graph backfill` first.[/]")
+        elif report.unresolved == 0:
+            console.print(
+                "[green]Already re-keyed[/] — every graph anchor already uses a stable "
+                "page id. Nothing to convert."
+            )
+        else:
+            console.print(
+                f"[yellow]{report.unresolved} anchor(s) could not be resolved to a page id[/] "
+                "(left untouched as tolerated dangling anchors)."
+            )
+
+
+@graph_app.command("gaps")
+def graph_gaps(
+    limit: int = typer.Option(25, "--limit", help="Max gaps to show"),
+) -> None:
+    """List concepts the wiki links to but has no page for, ranked by references.
+
+    These are the highest-value pages to write next. Writing one and re-running
+    `mymem graph backfill` links its [[wikilinks]] to the new page automatically.
+    """
+    settings = _get_settings()
+    wiki_dir, *_ = _paths(settings)
+    graph_db = _graph_db_path(settings)
+    if not graph_db.exists():
+        console.print("[dim]No graph database yet. Run `mymem graph backfill` first.[/]")
+        return
+
+    from mymem.graph.gaps import gap_count, knowledge_gaps
+
+    gaps = knowledge_gaps(graph_db, limit=limit)
+    if not gaps:
+        console.print("[green]No knowledge gaps — every linked concept has a page.[/]")
+        return
+
+    # Resolve sample page ids → titles for readability.
+    from mymem.wiki.page import list_pages
+    id_to_title = {p.id: p.title for p in list_pages(wiki_dir) if p.id}
+
+    total = gap_count(graph_db)
+    table = Table(title=f"Knowledge Gaps (top {len(gaps)} of {total})", show_lines=False)
+    table.add_column("Missing concept", style="cyan")
+    table.add_column("Refs", justify="right")
+    table.add_column("Linked from", style="dim")
+    for g in gaps:
+        linked_from = ", ".join(
+            id_to_title.get(pid, pid[:8]) for pid in g.sample_page_ids
+        )
+        table.add_row(g.concept, str(g.inbound_refs), linked_from)
+    console.print(table)
 
 
 @graph_app.command("stats")

@@ -45,7 +45,7 @@ class TestUpsertEntity:
         assert e.canonical == "Sarah Chen"
         assert e.type == "person"
         assert e.description == "Platform lead"
-        assert e.page_slug is None
+        assert e.page_id is None
 
     def test_invalid_type_raises(self, db: Path) -> None:
         with pytest.raises(ValueError, match="type"):
@@ -72,15 +72,15 @@ class TestUpsertEntity:
         e = upsert_entity(db, "RAG", entity_type="concept", description="")
         assert e.description == "kept"
 
-    def test_upsert_sets_page_slug_when_provided(self, db: Path) -> None:
+    def test_upsert_sets_page_id_when_provided(self, db: Path) -> None:
         upsert_entity(db, "RAG", entity_type="concept")
-        e = upsert_entity(db, "RAG", entity_type="concept", page_slug="rag")
-        assert e.page_slug == "rag"
+        e = upsert_entity(db, "RAG", entity_type="concept", page_id="rag")
+        assert e.page_id == "rag"
 
-    def test_upsert_keeps_page_slug_when_not_provided(self, db: Path) -> None:
-        upsert_entity(db, "RAG", entity_type="concept", page_slug="rag")
+    def test_upsert_keeps_page_id_when_not_provided(self, db: Path) -> None:
+        upsert_entity(db, "RAG", entity_type="concept", page_id="rag")
         e = upsert_entity(db, "RAG", entity_type="concept")
-        assert e.page_slug == "rag"
+        assert e.page_id == "rag"
 
     def test_canonical_whitespace_normalized(self, db: Path) -> None:
         e = upsert_entity(db, "  Sarah   Chen  ", entity_type="person")
@@ -198,7 +198,7 @@ class TestMentions:
 
 class TestDeletePage:
     def test_removes_mentions(self, db: Path) -> None:
-        e = upsert_entity(db, "RAG", entity_type="concept", page_slug="rag")
+        e = upsert_entity(db, "RAG", entity_type="concept", page_id="rag")
         add_mention(db, e.id, "p1")
         removed = delete_page(db, "p1")
         assert removed == 1
@@ -218,16 +218,16 @@ class TestDeletePage:
         delete_page(db, "p1")
         assert get_entity(db, e.id) is not None
 
-    def test_clears_page_slug_but_keeps_entity_with_mentions(self, db: Path) -> None:
+    def test_clears_page_id_but_keeps_entity_with_mentions(self, db: Path) -> None:
         # The deleted page IS the entity's own page; other pages still mention it
-        e = upsert_entity(db, "RAG", entity_type="concept", page_slug="rag")
+        e = upsert_entity(db, "RAG", entity_type="concept", page_id="rag")
         add_mention(db, e.id, "other-page")
         delete_page(db, "rag")
         got = get_entity(db, e.id)
-        assert got is not None and got.page_slug is None
+        assert got is not None and got.page_id is None
 
     def test_prunes_own_page_entity_with_no_other_mentions(self, db: Path) -> None:
-        e = upsert_entity(db, "RAG", entity_type="concept", page_slug="rag")
+        e = upsert_entity(db, "RAG", entity_type="concept", page_id="rag")
         delete_page(db, "rag")
         assert get_entity(db, e.id) is None
 
@@ -326,3 +326,86 @@ class TestDeleteMentionsBySource:
     def test_empty_sources_is_noop(self, db: Path) -> None:
         from mymem.graph.store import delete_mentions_by_source
         assert delete_mentions_by_source(db, ()) == 0
+
+
+# ---------------------------------------------------------------------------
+# init_db migration — legacy page_slug → page_id rename (ADR-014 D4)
+# ---------------------------------------------------------------------------
+
+_LEGACY_SCHEMA = """
+CREATE TABLE entities (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    canonical   TEXT NOT NULL,
+    type        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    page_slug   TEXT,
+    created     TEXT NOT NULL,
+    updated     TEXT NOT NULL
+);
+CREATE UNIQUE INDEX idx_entities_canonical ON entities(canonical COLLATE NOCASE);
+CREATE TABLE aliases (
+    entity_id INTEGER NOT NULL REFERENCES entities(id),
+    alias     TEXT NOT NULL,
+    UNIQUE(entity_id, alias)
+);
+CREATE TABLE mentions (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_id INTEGER NOT NULL REFERENCES entities(id),
+    page_slug TEXT NOT NULL,
+    span      TEXT NOT NULL DEFAULT '',
+    source_id TEXT NOT NULL DEFAULT '',
+    created   TEXT NOT NULL
+);
+CREATE INDEX idx_mentions_page   ON mentions(page_slug);
+CREATE INDEX idx_mentions_entity ON mentions(entity_id);
+"""
+
+
+class TestLegacyMigration:
+    def _make_legacy_db(self, path: Path) -> None:
+        import sqlite3
+        conn = sqlite3.connect(path)
+        try:
+            with conn:
+                conn.executescript(_LEGACY_SCHEMA)
+                conn.execute(
+                    "INSERT INTO entities (canonical, type, description, page_slug,"
+                    " created, updated) VALUES ('RAG','concept','', 'rag', 't', 't')"
+                )
+                conn.execute(
+                    "INSERT INTO mentions (entity_id, page_slug, span, source_id, created)"
+                    " VALUES (1, 'src-page', '', 'ingest', 't')"
+                )
+        finally:
+            conn.close()
+
+    def test_init_db_renames_page_slug_to_page_id_preserving_data(self, tmp_path: Path) -> None:
+        p = tmp_path / "legacy.db"
+        self._make_legacy_db(p)
+
+        init_db(p)  # should migrate page_slug → page_id
+
+        # Old column gone, new column present, values preserved.
+        e = find_entity(p, "RAG")
+        assert e is not None and e.page_id == "rag"
+        ms = mentions_for_page(p, "src-page")
+        assert len(ms) == 1 and ms[0].source_id == "ingest"
+
+    def test_init_db_migration_is_idempotent(self, tmp_path: Path) -> None:
+        p = tmp_path / "legacy.db"
+        self._make_legacy_db(p)
+        init_db(p)
+        init_db(p)  # second run must be a no-op, not error
+        e = find_entity(p, "RAG")
+        assert e is not None and e.page_id == "rag"
+
+    def test_fresh_db_has_page_id_and_no_page_slug(self, tmp_path: Path) -> None:
+        import sqlite3
+        p = tmp_path / "fresh.db"
+        init_db(p)
+        conn = sqlite3.connect(p)
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(mentions)").fetchall()}
+        finally:
+            conn.close()
+        assert "page_id" in cols and "page_slug" not in cols

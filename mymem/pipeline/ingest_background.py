@@ -27,20 +27,20 @@ async def _graph_extract_background(
     *,
     source_name: str,
     source_text: str,
-    page_titles: list[str],
+    page_ids: list[str],
     router: ModelRouter,
     db_path: Path,
 ) -> None:
     """
     Fire-and-forget: extract entities from the source, resolve against the
     entity catalog, and record mentions on the pages this ingest touched.
+    Mentions are anchored on each page's stable id (ADR-013/014).
     Never raises — graph failures must not affect ingest.
     """
     try:
         from mymem.graph.extractor import extract_entities
         from mymem.graph.resolver import resolve_entities
         from mymem.graph.store import add_mention, init_db, upsert_entity
-        from mymem.wiki.types import slugify
 
         graph_db = db_path.parent / "graph.db"
         init_db(graph_db)
@@ -50,7 +50,6 @@ async def _graph_extract_background(
             return
 
         resolutions = await resolve_entities(graph_db, extracted, router=router)
-        slugs = [slugify(title) for title in page_titles]
 
         for entity, resolution in zip(extracted, resolutions, strict=True):
             entity_id = resolution.entity_id
@@ -61,14 +60,14 @@ async def _graph_extract_background(
                     entity_type=entity.type,
                     description=entity.description,
                 ).id
-            for slug in slugs:
+            for page_id in page_ids:
                 add_mention(
-                    graph_db, entity_id, slug, span=entity.span, source_id=source_name
+                    graph_db, entity_id, page_id, span=entity.span, source_id=source_name
                 )
 
         log.info(
             "Graph extraction complete",
-            source=source_name, entities=len(extracted), pages=len(slugs),
+            source=source_name, entities=len(extracted), pages=len(page_ids),
         )
     except Exception as exc:
         log.warning(

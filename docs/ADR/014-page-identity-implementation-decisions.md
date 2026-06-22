@@ -83,3 +83,40 @@ silence ruff's builtin-shadowing warning with a targeted `# noqa: A003`.
 | Rename to `uid`/`page_id` on the dataclass | No shadowing | Mismatch between attribute and the `id:` frontmatter key; less natural | ❌ |
 
 **Revisit when:** the project bans builtin-shadowing project-wide → rename behind the I/O boundary.
+
+---
+
+## D6. Graph re-key slug → id (the D4 deferral, realized in V1-0011)
+
+**Chosen:** the entity graph now anchors pages on the stable `page_id` (ULID) instead of the
+slug. `graph/store.py` renames its `page_slug` column to `page_id` on both `entities` and
+`mentions` (and the dataclass fields / function params follow); the store stays
+identity-agnostic — it persists whatever string key callers give it. Callers pass `page.id`:
+`backfill.seed_from_wiki` (`page.id or page.path.stem` fallback for pre-id pages),
+`ingest_background._graph_extract_background` (now takes `page_ids`, fed from `touched_pages`),
+and the web delete/archive `_graph_cleanup` (`page.id`). Migration is two-step and idempotent:
+`init_db` runs a structural `ALTER TABLE … RENAME COLUMN` for legacy DBs, then
+`rekey_graph_page_ids()` (CLI: `mymem graph rekey`) converts existing slug values to ids via the
+`wiki/identity` index. Unresolvable slugs are left in place (tolerated dangling anchors, never
+deleted).
+
+| Alternative | Pros | Cons | Verdict |
+|---|---|---|---|
+| **Rename column + value-migrate + callers pass `page.id`** (chosen) | Graph and claims now share `page_id`; survives a future rename; one clean store key; auto structural migration + explicit value re-key keep live DBs safe | Touches store + 2 callers + web cleanup + 5 test files; live DB needs a one-time `mymem graph rekey` | ✅ |
+| Keep slug, add a parallel `page_id` column | No caller churn | Two keys to keep in sync; the slug key is the thing we wanted to stop depending on | ❌ |
+| Defer until a rename surface exists | Zero work now | Leaves graph and claims keyed differently; re-opens the same migration later under more data | ❌ (user chose to realize it now) |
+
+**Sub-decisions:**
+- **Store query functions** (`pages_for_entity`, `entities_for_page`, `mentions_for_page`) return
+  / accept ids now. Safe because retrieval RRF (the only would-be consumer) isn't wired yet
+  (graph Phase 3) — no production caller depended on slug return values.
+- **`/api/graph` untouched** — it builds the *wikilink navigation* graph from `list_pages()`,
+  not the entity store; it already addresses pages by slug for the frontend.
+- **Value migration needs `wiki/identity`**, which `store.py` (pure, no wiki import) can't call —
+  so the slug→id conversion lives in `backfill.rekey_graph_page_ids`, not `init_db`.
+
+**Live migration step:** run `mymem graph rekey` once on the existing `data/graph.db` to convert
+slug anchors to ids (the structural rename happens automatically on next `init_db`).
+
+**Revisit when:** a page-rename surface lands → confirm rename updates (or re-keys) graph anchors,
+and add the rename redirects still deferred from D4.
