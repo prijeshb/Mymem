@@ -51,6 +51,9 @@ Unlike pure RAG tools that index raw chunks, MyMem **accumulates knowledge** —
 - **Multi-LLM router** — Ollama (local, default), Anthropic, OpenAI with automatic fallback chain
 - **Domain taxonomy** — pages tagged by domain (tech, finance, spiritual, health, personal, …) for filtered retrieval
 - **Knowledge graph** — D3 force-directed wikilink network, filterable by domain
+- **Entity graph & knowledge gaps** — typed entities anchored on stable page ids; surfaces "pages worth writing next" (concepts you link to but haven't written) ranked by reference count
+- **Compounding claims** — bi-temporal claim ledger with ADD/MERGE/SUPERSEDE provenance; pages can render their body from accumulated claims
+- **OKF interchange** — export to / import from Google Cloud's Open Knowledge Format (markdown bundles), with lossless identity-stable round-trips
 - **Introspect engine** — daily summary, research topic suggestions, quiz generator, knowledge digest
 - **PDF support** — layout-aware chunking, RAG-only indexing for dense documents
 - **Source types** — article, paper, repo, dataset, image, YouTube, podcast, tweet, webpage, book, note
@@ -107,6 +110,14 @@ mymem lint
 
 # Daily introspection
 mymem introspect
+
+# Entity graph: seed/repair, then see the highest-value pages to write next
+mymem graph backfill
+mymem graph gaps
+
+# Interop: export the wiki to an OKF bundle, or import one back (lossless round-trip)
+mymem export okf ./okf-bundle
+mymem import okf ./okf-bundle
 ```
 
 ---
@@ -133,9 +144,11 @@ wiki/         # LLM-generated markdown pages with YAML frontmatter
 data/         # SQLite databases (traces, RAG embeddings, curiosity weights, evals)
 frontend/     # React SPA → built to frontend/dist/ served by FastAPI in prod
 mymem/
-  pipeline/   # ingest, query, lint, introspect, multi-LLM router
+  pipeline/   # ingest, query, lint, introspect, reconcile/compounding, multi-LLM router
+  knowledge/  # bi-temporal claims ledger + retrieval + render; okf/ (OKF export/import)
+  graph/      # entity store, extractor, 3-tier resolver, backfill, knowledge gaps
   rag/        # sqlite-vec chunk store, embedder, wiki chunker, PDF parser
-  wiki/       # page CRUD, index, log, types
+  wiki/       # page CRUD, index, log, types, stable-id identity
   evals/      # wiki quality, chunking ablation, retrieval eval, RAGAS-lite
   web/        # FastAPI routes + app factory
   observability/ # structured logger, LLM call tracer, health

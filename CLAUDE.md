@@ -241,6 +241,33 @@ Starts FastAPI + uvicorn. Dashboard at http://localhost:7860.
 mymem tags          # list all domains + tag frequencies from curiosity.db
 ```
 
+### Graph (entity layer, ADR-007/008)
+```bash
+mymem graph backfill                  # Tier-1 structural seed (idempotent repair)
+mymem graph backfill --classify       # + Tier-2 LLM typing & aliases
+mymem graph backfill --semantic       # resolve worded-differently wikilinks via embeddings
+mymem graph backfill --judge          # resolve borderline wikilinks via an LLM judge
+mymem graph rekey                     # migrate page anchors slug → stable id (ADR-014 D6)
+mymem graph gaps [--limit N]          # rank referenced-but-unwritten concepts (ADR-008 D12)
+mymem graph stats                     # entity-graph health metrics
+```
+Mentions/entities anchor on the stable page `id` (ADR-013/014), not the slug. "Gaps" are
+pageless entities a wiki page links to but has no page for — writing one and re-running
+`backfill` auto-links it. Default link resolution is deterministic (exact + fuzzy);
+`--semantic`/`--judge` are opt-in and only help on a fresh seed (existing broken links
+exact-match their own pageless entity). Also exposed as `GET /api/graph/gaps`.
+
+### Export / Import — OKF interchange (ADR-016)
+```bash
+mymem export okf <out-dir>            # wiki → conformant Open Knowledge Format v0.1 bundle
+mymem import okf <bundle-dir>         # OKF bundle → wiki (lossless inverse); --overwrite to replace
+```
+OKF is Google Cloud's open spec for the LLM-wiki pattern (markdown + YAML frontmatter, one
+file per concept). Export maps `domain`→`type`, `updated`→ISO `timestamp`, first paragraph→
+`description`, `[[wikilinks]]`→`/slug.md`, and preserves `id`/`domain`/`sources` as extension
+keys so a MyMem-origin bundle round-trips identity-stable. Import is the direct inverse (not
+the LLM pipeline), so the ULID `id` and links survive a round trip.
+
 ## Web UI
 
 **Design reference:** [sage-wiki](https://github.com/xoai/sage-wiki) — adopt its layout patterns,
@@ -282,6 +309,7 @@ Browser → FastAPI (:7860) [production]
 | `GET /api/pages` | Page list (filterable by domain/tag) |
 | `GET /api/stats` | Page count, sources, orphans, domain breakdown, session cost |
 | `GET /api/graph` | Graph nodes + edges as JSON |
+| `GET /api/graph/gaps` | Referenced-but-unwritten concepts, ranked by inbound links (ADR-008 D12) |
 | `POST /api/ingest` | Trigger ingest from URL or path |
 | `POST /api/upload` | Multipart file upload → ingest |
 | `POST /api/ingest-text` | Paste raw text → ingest |
@@ -353,7 +381,7 @@ Relationship types: `is-a`, `part-of`, `related-to`, `contradicts`, `supports`, 
 | `mymem/rag/embedder.py` | DONE — Ollama nomic-embed-text, 768-dim (96% tested) |
 | `mymem/rag/ingest.py` | DONE — `ingest_wiki_page(force)` + PDF orchestration (100% tested) |
 | `mymem/rag/wiki_chunker.py` | DONE — markdown/header + parent-child chunking for wiki pages |
-| `mymem/web/routes/api.py` | DONE — all JSON endpoints incl. delete/archive/restore/rag/questions/digest |
+| `mymem/web/routes/api.py` | DONE — all JSON endpoints incl. delete/archive/restore/rag/questions/digest/graph-gaps |
 | `mymem/web/routes/logs.py` | DONE — `GET /api/log` + `GET /api/heatmap` (extracted from api.py) |
 | `mymem/web/app.py` | DONE — `--dev` flag for CORS + reload; serves SPA or Jinja2 fallback |
 | `mymem/web/routes/pages.py` | LEGACY — Jinja2 fallback only |
@@ -362,8 +390,18 @@ Relationship types: `is-a`, `part-of`, `related-to`, `contradicts`, `supports`, 
 | `frontend/src/pages/DashboardPage.tsx` | DONE — 3-column chat layout: domain sidebar + chat thread + wiki panel |
 | `frontend/src/pages/IntrospectPage.tsx` | DONE — daily summary, research topic, quiz generator, knowledge digest, curiosity trends |
 | `frontend/src/components/Navbar.tsx` | DONE — gradient logo mark, nav right, search hidden |
+| `mymem/pipeline/ingest_claims.py` | DONE — compounding persistence + `_sync_claims_sections`; `body_from_claims` default-on (ADR-015 D21) |
+| `mymem/pipeline/reconcile.py` · `compounding.py` | DONE — ADD/MERGE/SUPERSEDE/NOOP + retrieve→decide→apply (ADR-011/015) |
+| `mymem/knowledge/claims.py` · `claim_index.py` · `retrieval.py` | DONE — bi-temporal claims ledger + cross-page sqlite-vec retrieval (`data/claims.db`) |
+| `mymem/knowledge/render.py` | DONE — claims section + `render_page_body` (body-from-claims, default-on); 100% tested |
+| `mymem/knowledge/okf/` | DONE — OKF v0.1 export/import (`_spec`,`_map`,`_links`,`exporter`,`conformance`,`importer`); 99% tested (ADR-016) |
+| `mymem/graph/store.py` | DONE — entities/aliases/mentions; anchors on stable `page_id` + slug→id migration (ADR-014 D6) |
+| `mymem/graph/backfill.py` | DONE — Tier-1 seed + Tier-2 classify + opt-in `--semantic`/`--judge` + `rekey_graph_page_ids` |
+| `mymem/graph/gaps.py` | DONE — ranked referenced-but-unwritten concepts (ADR-008 D12); 100% tested |
+| `mymem/graph/extractor.py` · `resolver.py` | DONE — typed entity extraction + 3-tier resolution (ADR-007/008) |
 | `data/curiosity.db` | DONE — schema created on first run |
 | `data/rag.db` | DONE — created on first PDF ingest (sqlite-vec virtual table) |
+| `data/claims.db` · `data/graph.db` | DONE — claims ledger + entity graph (created on first ingest/backfill) |
 
 ## Tag Taxonomy
 

@@ -3,11 +3,19 @@
 **PRD:** docs/PRD/okf-integration.md · **ADR:** docs/ADR/016-okf-integration.md
 **Research:** docs/research/open-knowledge-format.md
 
+> **Shipped (V1-0013) — supersedes the import design below.** Import was implemented as a
+> **direct, lossless inverse of export** (`mymem/knowledge/okf/importer.py`: `import_okf`,
+> CLI `mymem import okf`), **not** as a `SourceReader` feeding the LLM ingest pipeline. The
+> pipeline route was rejected during build because it re-derives content and mints new ids,
+> breaking the PRD's lossless round-trip ship gate (G4). See ADR-016 "Implementation decision".
+> The `SourceReader`/`--type okf` description in the Import sections below is the original
+> sketch, kept for context.
+
 ## Overview
 
 Two on-demand adapters bridge MyMem's wiki and the OKF v0.1 file format:
 an **exporter** (wiki → OKF bundle, a pure transform) and an **importer** (OKF bundle → wiki,
-a new `SourceReader` feeding the existing ingest pipeline). Neither changes how MyMem stores
+the direct inverse of export — see the banner above). Neither changes how MyMem stores
 knowledge — OKF is an interchange surface, not the storage model.
 
 ## Architecture (ASCII)

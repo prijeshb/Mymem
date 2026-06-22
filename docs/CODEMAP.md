@@ -39,8 +39,11 @@
 | Add a new eval module | Subclass `mymem/evals/_base.py:Evaluator[T]`, register in `mymem/evals/runner.py` | |
 | Add an entity type | `mymem/graph/store.py` → `ENTITY_TYPES` (validated everywhere from this tuple) | |
 | Tune entity resolution thresholds | `mymem/graph/resolver.py` → `FUZZY_ACCEPT` / `FUZZY_BORDERLINE` / `COSINE_ACCEPT` | |
-| Migrate/repair the entity graph | `mymem graph backfill [--classify]` → `mymem/graph/backfill.py` | Tier-1 re-seed is idempotent |
-| Change graph-on-ingest behavior | `mymem/pipeline/ingest_background.py` → `_graph_extract_background()` | fire-and-forget |
+| Migrate/repair the entity graph | `mymem graph backfill [--classify] [--semantic] [--judge]` → `mymem/graph/backfill.py:seed_from_wiki` | Tier-1 re-seed idempotent; `--semantic`/`--judge` opt-in resolver tiers |
+| Re-key graph anchors slug→id | `mymem graph rekey` → `mymem/graph/backfill.py:rekey_graph_page_ids` (+ `store.init_db` column migration) | ADR-014 D6; idempotent |
+| Surface knowledge gaps (referenced-but-unwritten) | `mymem graph gaps` / `GET /api/graph/gaps` → `mymem/graph/gaps.py:knowledge_gaps` | ADR-008 D12; ranks pageless entities by inbound pages |
+| Export/import OKF bundles | `mymem export okf` / `mymem import okf` → `mymem/knowledge/okf/exporter.py`,`importer.py` | ADR-016; lossless round-trip; direct map (not LLM pipeline) |
+| Change graph-on-ingest behavior | `mymem/pipeline/ingest_background.py` → `_graph_extract_background()` (anchors on `page_id`) | fire-and-forget |
 | Change RAG-on-ingest indexing | `mymem/pipeline/ingest_rag.py` → `_rag_index_pdf`/`_rag_index_wiki`/`_rag_index_text` | best-effort, never blocks |
 | Change a background eval on ingest | `mymem/pipeline/ingest_background.py` → `_eval_extraction_background`/`_eval_decision_agreement_background`; reference LLM via `_build_reference_llm` | fire-and-forget |
 
@@ -52,7 +55,7 @@
 
 ```
 config.py                   Settings (pydantic-settings): provider, models, paths, pipeline.*
-cli.py                      Typer CLI: ingest / query / lint / serve / eval-review / tags
+cli.py                      Typer CLI: ingest/query/lint/serve/tags + graph (backfill/rekey/gaps/stats) + export/import okf + pages/claims
 
 pipeline/
   llm.py                    LLMProvider ABC + concrete providers + build_provider() factory + complete() facade
@@ -81,13 +84,21 @@ knowledge/                  Compounding ledger (ADR-011/015) — data/claims.db
   claims.py                 bi-temporal claims store: add/get/supersede/corroborate/replace_source_claims
   claim_index.py            sqlite-vec cosine index over claims (global cross-page retrieval, D19)
   retrieval.py              retrieve_candidates() — global active claims via claim_index (vector in)
-  render.py                 render_claims_section()/sync_claims_section() — "Knowledge Claims" wiki markdown
+  render.py                 render_claims_section()/sync_claims_section() + render_page_body() (body-from-claims, default-on)
+  okf/                      OKF v0.1 interchange (ADR-016) — export/import the wiki as an Open Knowledge Format bundle
+    _spec.py                required `type`, reserved files, conformance predicate, concept_id()
+    _map.py                 to_okf_frontmatter()/from_okf_frontmatter() — domain↔type, date↔timestamp, extension keys
+    _links.py               wikilinks_to_markdown()/markdown_links_to_wikilinks()
+    exporter.py             export_okf() — wiki → conformant bundle + index.md/log.md → ExportReport
+    conformance.py          check_bundle() — every non-reserved .md has a non-empty `type`
+    importer.py             import_okf() — direct lossless inverse → WikiPage (preserves ULID id)
 
-graph/                      Entity layer (ADR-007) — data/graph.db
-  store.py                  entities/aliases/mentions repository + delete_page() pruning + stats()
+graph/                      Entity layer (ADR-007/008) — data/graph.db
+  store.py                  entities/aliases/mentions repo (anchored on stable page_id) + slug→id migration + delete_page() + stats()
   extractor.py              extract_entities() — typed JSON extraction + rapidfuzz span grounding
   resolver.py               resolve_entities() — 3-tier: exact/alias → fuzzy+cosine → batched LLM judge
-  backfill.py               seed_from_wiki() (Tier-1, idempotent repair) + classify_entities() (Tier-2 LLM)
+  backfill.py               seed_from_wiki(embed_fn/router opt-in) + classify_entities() + rekey_graph_page_ids() (ADR-014 D6)
+  gaps.py                   knowledge_gaps()/gap_count() — rank referenced-but-unwritten concepts (ADR-008 D12)
 
 wiki/
   types.py                  WikiPage (incl. stable `id`), IndexEntry, LogEntry, LogOperation, TagDomain, slugify(), mint_id()

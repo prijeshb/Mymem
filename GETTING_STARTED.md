@@ -95,6 +95,13 @@ mymem query "What is multi-head attention?" --save  # query the wiki
 mymem lint                                          # check for broken links / orphans
 
 mymem introspect                                    # daily summary + recommendations
+
+mymem graph backfill                                # seed/repair the entity graph
+mymem graph gaps                                    # rank concepts you link to but haven't written
+mymem graph rekey                                   # migrate graph anchors slug → stable id
+
+mymem export okf ./okf-bundle                       # export wiki → Open Knowledge Format bundle
+mymem import okf ./okf-bundle                       # import an OKF bundle back into the wiki
 ```
 
 ---
@@ -167,10 +174,12 @@ wiki/       # LLM-generated markdown pages
 mymem/      # Python package
   cli.py
   config.py
-  pipeline/
+  pipeline/   # ingest, query, reconcile/compounding, router
+  knowledge/  # claims ledger + okf/ (OKF export/import)
+  graph/      # entity store, resolver, backfill, knowledge gaps
   wiki/
   web/
-data/       # SQLite databases + logs
+data/       # SQLite databases + logs (mymem / rag / claims / graph / curiosity / evals)
 ```
 
 See `CLAUDE.md` for full architecture and `PLAN.md` for build order.
