@@ -101,13 +101,19 @@ class WebSourceReader(SourceReader):
 
     async def read(self, source: str, source_type: str) -> str:
         if trafilatura is not None:
-            # trafilatura.fetch_url is a blocking I/O call — run off the event loop.
+            # fetch_url is blocking I/O — run off the event loop. It returns the RAW
+            # downloaded HTML; extract clean article text from it via _html_to_text.
+            # Returning the raw HTML (the old bug) floods the LLM with markup/nav/scripts
+            # and starves idea extraction — a 34KB article arrived as 380KB of HTML.
             loop = asyncio.get_running_loop()
-            text = await loop.run_in_executor(None, trafilatura.fetch_url, source)
-            if text and len(text.strip()) > 100:
-                log.info("trafilatura fetched URL", chars=len(text), url=source)
-                return text.strip()
-            log.warning("trafilatura returned no content for URL", url=source)
+            downloaded = await loop.run_in_executor(None, trafilatura.fetch_url, source)
+            if downloaded:
+                text = _html_to_text(downloaded)
+                if text and len(text.strip()) > 100:
+                    log.info("trafilatura fetched + extracted URL",
+                             text_chars=len(text), url=source)
+                    return text.strip()
+            log.warning("trafilatura returned no usable content for URL", url=source)
         else:
             log.warning(
                 "trafilatura not installed — falling back to httpx. "

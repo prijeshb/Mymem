@@ -137,7 +137,7 @@ class ModelRouter:
         )
 
         last_exc: Exception = RuntimeError("No models available")
-        for model in attempts:
+        for idx, model in enumerate(attempts):
             spec     = self._registry.get(model)
             provider = spec.provider if spec else self._provider
             try:
@@ -165,9 +165,22 @@ class ModelRouter:
                     )
                 return result
             except Exception as exc:
-                log.warning("Model failed — trying fallback", exc_info=True,
-                            model=model, task=task, error=str(exc))
                 last_exc = exc
+                next_model = attempts[idx + 1] if idx + 1 < len(attempts) else None
+                if next_model is not None:
+                    # Record the fallback to the log file (auditable) without the noisy
+                    # full traceback — this is a handled retry, not a failure.
+                    log.warning(
+                        "Model failed — falling back to next model",
+                        task=task, failed_model=model, provider=provider,
+                        next_model=next_model, error=str(exc),
+                    )
+                else:
+                    # Last model in the chain failed — nothing left to try; keep the trace.
+                    log.error(
+                        "Model failed — no fallback remaining", exc_info=True,
+                        task=task, failed_model=model, provider=provider, error=str(exc),
+                    )
 
         log.error("All models exhausted", task=task, tried=str(attempts))
         raise last_exc

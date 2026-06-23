@@ -753,21 +753,28 @@ class TestHtmlToText:
 class TestHtmlFetchEncoding:
     @pytest.mark.asyncio
     async def test_trafilatura_fetch_url_used_for_http(self, monkeypatch):
-        """When trafilatura is available, _read_source calls fetch_url directly
-        instead of httpx — trafilatura handles decompression, encoding, and
-        extraction internally, avoiding brotli/charset issues entirely."""
+        """When trafilatura is available, _read_source calls fetch_url to download the
+        RAW HTML and then extract() to get clean article text. Returning the raw HTML
+        (the prior bug) flooded the LLM with markup, so read() must return the extracted
+        text, not the download."""
         fetched_urls: list[str] = []
+        clean_text = (
+            "2025 Annual Letter\n\n"
+            "2025 was, in some ways, a historic year for artificial intelligence. "
+            "Capital efficiency became the defining metric for startups. "
+            "The companies that survived were those that paired intelligence with restraint."
+        )
 
         class FakeTrafilatura:
             @staticmethod
             def fetch_url(url: str) -> str:
                 fetched_urls.append(url)
-                return (
-                    "2025 Annual Letter\n\n"
-                    "2025 was, in some ways, a historic year for artificial intelligence. "
-                    "Capital efficiency became the defining metric for startups. "
-                    "The companies that survived were those that paired intelligence with restraint."
-                )
+                return f"<html><body><article>{clean_text}</article></body></html>"
+
+            @staticmethod
+            def extract(html, **kwargs):
+                # Real trafilatura turns the downloaded HTML into clean text.
+                return clean_text
 
         monkeypatch.setattr(readers_mod, "trafilatura", FakeTrafilatura)
 
@@ -777,6 +784,7 @@ class TestHtmlFetchEncoding:
         assert fetched_urls == [url], "trafilatura.fetch_url should be called with the URL"
         assert "2025 Annual Letter" in text
         assert "historic" in text
+        assert "<html" not in text  # raw HTML must not leak through
 
     @pytest.mark.asyncio
     async def test_falls_back_to_httpx_when_trafilatura_missing(self, monkeypatch):

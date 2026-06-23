@@ -240,6 +240,52 @@ class TestFreeTierFallbackChain:
         assert calls[0][1] == "nvidia"   # tried NVIDIA first
         assert calls[1][1] == "groq"     # swapped to Groq on the 429
 
+    async def test_fallback_is_logged_with_next_model(self):
+        """A handled fallback is recorded to the log as a clean WARNING naming the
+        failed AND next model — no error-level traceback for a recovered retry."""
+        import logging
+        from unittest.mock import patch
+
+        from mymem.pipeline.router._chain import FreeTierFallbackChain
+        from mymem.pipeline.router._credentials import KeyMapCredentials
+        from mymem.pipeline.router._registry import DefaultModelRegistry
+
+        async def fake_complete(prompt, *, model, provider, **kwargs):
+            if provider == "nvidia":
+                raise RuntimeError("Error code: 429 - rate limit exceeded")
+            return f"ok-from-{provider}"
+
+        records: list[logging.LogRecord] = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record)
+
+        mlog = logging.getLogger("mymem")  # children propagate up to here
+        handler = _Capture()
+        handler.setLevel(logging.WARNING)
+        mlog.addHandler(handler)
+        try:
+            router = ModelRouter(
+                task_models={"compile": "meta/llama-3.3-70b-instruct"},
+                provider="nvidia",
+                credentials=KeyMapCredentials.from_kwargs(groq="gk", nvidia="nk"),
+                fallback_chain=FreeTierFallbackChain(has_groq=True, has_openrouter=False),
+                registry=DefaultModelRegistry(),
+            )
+            with patch("mymem.pipeline.router._router.complete", new=fake_complete):
+                result = await router.call("prompt", task="compile")
+        finally:
+            mlog.removeHandler(handler)
+
+        assert result == "ok-from-groq"
+        fallbacks = [r for r in records if "falling back" in r.getMessage().lower()]
+        assert fallbacks, "expected a fallback to be logged"
+        rec = fallbacks[0]
+        assert rec.levelno == logging.WARNING  # handled retry, not an error
+        assert getattr(rec, "failed_model", None) == "meta/llama-3.3-70b-instruct"
+        assert getattr(rec, "next_model", None)  # names the model it fell back to
+
 
 # ---------------------------------------------------------------------------
 # ChunkSplitter

@@ -21,8 +21,8 @@ models:
   compile:       meta/llama-3.3-70b-instruct              # nvidia — raw → wiki article
   merge:         nvidia/llama-3.3-nemotron-super-49b-v1   # nvidia — merge compiled chunks
   qa:            meta/llama-3.3-70b-instruct              # nvidia — research Q&A
-  lint:          llama-3.1-8b-instant                     # groq  — fast health checks
-  classify:      llama-3.1-8b-instant                     # groq  — fast domain/tag
+  lint:          gemma4:31b-cloud                         # ollama cloud — fast health checks (Groq 6000 TPM too low)
+  classify:      gemma4:31b-cloud                         # ollama cloud — fast domain/tag (Groq 6000 TPM too low)
   introspect:    nvidia/llama-3.3-nemotron-super-49b-v1   # nvidia — daily summary
   export_slides: meta/llama-3.3-70b-instruct              # nvidia
   export_charts: meta/llama-3.3-70b-instruct              # nvidia
