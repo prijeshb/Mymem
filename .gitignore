@@ -39,6 +39,9 @@ wiki.bak*/
 # Outputs (generated artifacts — charts, slides, browser test output, etc.)
 outputs/
 
+# Generated test/run transcripts (regenerable via scripts/; reports embed the excerpts)
+docs/testing/*-output.txt
+
 # Logs
 *.log
 mymem.log

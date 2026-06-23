@@ -35,6 +35,7 @@
 | ADR-014 | Page identity implementation decisions (mint_id home, auto-mint choke point, exact resolution, scope fence) | Accepted |
 | ADR-015 | Compounding ingest implementation decisions (Phase 1: span grounding substring+fuzzy, blank-not-drop, persist in Phase 2) | Accepted |
 | ADR-016 | Open Knowledge Format (OKF) integration (two-way interchange via export adapter + direct importer; not native storage) | Accepted |
+| ADR-017 | Agent-to-agent knowledge interop — MCP access layer + OKF payloads (read-only P1; contribute P2; A2A federation/sync P3) | Accepted (P1 built) |
 
 ## Completed Features
 
@@ -75,6 +76,7 @@
 | Broken-link precision: opt-in semantic seed resolution | `mymem/graph/backfill.py`, `cli.py` | DONE — ADR-008 D12; `backfill --semantic`/`--judge` (default deterministic) |
 | Knowledge gaps: ranked referenced-but-unwritten concepts | `mymem/graph/gaps.py`, `cli.py`, `web/routes/api.py` | DONE — ADR-008 D12; `mymem graph gaps` + `GET /api/graph/gaps`; gaps.py 100% cov |
 | OKF (Open Knowledge Format) export + import | `mymem/knowledge/okf/`, `cli.py` | DONE — ADR-016; `mymem export okf` / `import okf`; lossless round-trip; okf pkg 99% cov |
+| MCP access layer (read-only) — wiki over MCP, OKF payloads | `mymem/interop/mcp/`, `cli.py` | DONE — ADR-017 Phase 1; `mymem mcp serve`; tools+resources delegate to internals; pure handlers 97–100% cov |
 
 ## Security Status
 - **Last Audit**: 2026-06-11
@@ -92,6 +94,22 @@
 ## Planned Features
 
 ### In Progress
+- [x] Agent-to-agent knowledge interop (MCP + OKF; A2A later) — priority: **P1** — branch V1-0015 — ADR-017
+  - **Phase 1 DONE (read-only):** new thin `mymem/interop/mcp/` FastMCP server exposing tools
+    `search_wiki`/`get_page`/`ask`/`list_concepts`/`knowledge_gaps` + resources `okf://index`,
+    `okf://concept/{slug}`; **payloads = OKF concepts** (reuse `knowledge/okf/`); every handler delegates
+    to existing internals (`query_wiki`, `IndexManager.search`, `okf/_map`, `graph/gaps`). CLI
+    `mymem mcp serve` (stdio default; `--transport http` opt-in, fail-closed on missing `MYMEM_MCP_TOKEN`).
+    New optional dep group `mcp = [fastmcp>=3.4,<4]` (Apache-2.0) — core install/tests don't require it.
+    Pure handlers 97–100% cov (auth/context/resources 100%); 25 interop tests. mypy override for the
+    FastMCP-decorator glue module. **Per-request bearer auth** wired (`middleware.py` `BearerAuthMiddleware`,
+    ADR-017 F3) — HTTP smoke verified deny-without-token / allow-with-token. F1 (description wikilink
+    leak) fixed via shared `okf/_links.flatten_wikilinks`. No regressions (976 passed / 1 skipped).
+  - PRD: docs/PRD/agent-knowledge-interop.md · Architecture: docs/architecture/agent-knowledge-interop.md · Research: docs/research/agent-knowledge-interop.md
+  - Phase 2 (later): `propose_claim`/`propose_page` under WRITE scope → compounding ingest (ADR-011/015)
+    with `provenance.peer_id` + security scan. Phase 3 (later): `mymem/interop/a2a/` Agent Card + peer
+    registry + OKF-bundle sync; re-evaluate A2A vs ACP at that gate. Remote transport now has per-request
+    bearer auth; still trusted-network-only until the SSRF-allowlist + rate-limit backlog lands.
 - [ ] Stable page identity (ADR-013/014) — branch V1-0009 — status: Phase 0 core DONE
   - Done: `mint_id()` (ULID) + `WikiPage.id`; `write_page` auto-mints (+ `stamp_updated` flag);
     `read_page` loads id; `mymem/wiki/identity.py` (title|slug→id index + exact `resolve_to_id` +

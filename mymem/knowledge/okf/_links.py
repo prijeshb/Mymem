@@ -40,6 +40,13 @@ def wikilinks_to_markdown(
     return _WIKILINK_RE.sub(_repl, body), unresolved
 
 
+def flatten_wikilinks(text: str) -> str:
+    """Replace `[[Title]]` with plain `Title` — for plain-text fields (e.g. OKF
+    `description`), which should not carry link syntax. Leaves all other text intact.
+    """
+    return _WIKILINK_RE.sub(lambda m: m.group(1).strip(), text)
+
+
 def markdown_links_to_wikilinks(body: str) -> str:
     """Rewrite local `[text](/path/file.md)` markdown links back to `[[text]]`.
 

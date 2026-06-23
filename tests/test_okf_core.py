@@ -7,6 +7,7 @@ from datetime import date
 from pathlib import Path
 
 from mymem.knowledge.okf._links import (
+    flatten_wikilinks,
     markdown_links_to_wikilinks,
     wikilinks_to_markdown,
 )
@@ -125,3 +126,9 @@ class TestLinks:
         md, _ = wikilinks_to_markdown(body, resolve=lambda t: "vector-search")
         back = markdown_links_to_wikilinks(md)
         assert back == "Ref [[Vector Search]]."
+
+    def test_flatten_wikilinks_to_plain_text(self) -> None:
+        # description fields must not carry link syntax (ADR-017 F1)
+        text = "Moving to [[Microservices]] loses [[ACID]] guarantees."
+        assert flatten_wikilinks(text) == "Moving to Microservices loses ACID guarantees."
+        assert flatten_wikilinks("no links here") == "no links here"

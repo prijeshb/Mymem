@@ -303,3 +303,70 @@ mymem obsidian setup --vault-path PATH
 ```
 
 **Lesson:** Before building an integration, check if the formats are already compatible. "Integration" sometimes means pointing at the existing folder.
+
+---
+
+## [2026-06-22] MCP Access Layer (ADR-017) — serving the wiki to other agents, and the Claude-Desktop launch gotchas
+
+**Feature delivered:** `mymem/interop/mcp/` — a FastMCP server exposing the wiki as MCP tools
+(`search_wiki`, `get_page`, `ask`, `list_concepts`, `knowledge_gaps`) + resources (`okf://index`,
+`okf://concept/{slug}`), with **OKF v0.1 concepts as the payload format** (reuses ADR-016). CLI
+`mymem mcp serve` (stdio default; `--transport http` token-gated). Pure handlers delegate to existing
+internals; 27 tests; works in Claude Desktop / Claude Code / MCP Inspector.
+
+**Design that paid off:**
+- **Keep handlers pure, isolate the framework.** `tools.py`/`resources.py`/`auth.py` import no
+  `fastmcp`; only `server.py` does (lazy import). The whole tool surface is unit-testable without the
+  dependency and without a live LLM (inject a fake router for `ask`). The optional dep group
+  `mcp = [fastmcp>=3.4,<4]` keeps core install/CI free of it.
+- **MCP is the channel, OKF is the schema.** Returning OKF concepts (not bespoke JSON) means any
+  OKF-aware consumer understands the payload regardless of transport. Two standards compose.
+- **Verify at three levels:** in-memory `Client(server)` (fast, deterministic), spawned-stdio client
+  (proves the real process + stdout channel), and HTTP smoke (proves transport + auth). Each caught
+  bugs the others missed.
+
+**Three production bugs found only by actually launching it in Claude Desktop (Windows):**
+
+1. **Claude Desktop ignores the `cwd` field** in the stdio server config (build 1.13576). The server
+   was spawned from a Windows system dir, so relative paths (`wiki/`, `data/`, `config.yaml`) didn't
+   resolve and `ensure_dirs()` died with `PermissionError: Access is denied: 'raw'`. **Fix:** the
+   server must anchor itself — `mcp serve` now resolves a project root (`MYMEM_PROJECT_DIR` env, else
+   the editable-install package location validated by `pyproject.toml`/`wiki/` markers) and `os.chdir`s
+   to it **before** loading settings. Also set `MYMEM_PROJECT_DIR` in the config `env` as a guaranteed
+   signal. Don't rely on the MCP host's `cwd`.
+
+2. **On stdio, stdout IS the JSON-RPC channel — never print to it.** A single
+   `console.print("MyMem MCP server…")` (Rich `Console()` → stdout) corrupted the protocol:
+   the client threw `SyntaxError: Unexpected token 'M', "MyMem MCP "... is not valid JSON` and
+   disconnected. **Fix:** route all status/logs to **stderr** (`Console(stderr=True)`) and pass
+   `server.run(show_banner=False)` to suppress FastMCP's stdout banner. (The Rich log handler was
+   already on stderr — only the one stray print broke it.)
+
+3. **Logging must never crash the process.** `configure_logging` did
+   `log_file.parent.mkdir(...)` unguarded; under a protected CWD that raised `PermissionError` and
+   killed the server before it could serve. **Fix:** wrap the file-handler setup in `try/except OSError`
+   and degrade to console-only with a warning. A logging sink failure must be non-fatal.
+
+**Security finding (F3) — startup auth ≠ per-request auth.** The HTTP transport was fail-closed at
+*startup* (won't start without `MYMEM_MCP_TOKEN`) but initially did **not** check the token per
+request — an HTTP smoke connected with no token and was served everything. **Fix:**
+`BearerAuthMiddleware` (`on_request` → `get_http_headers(include_all=True)` → `authorize_request`)
+rejects unauthenticated HTTP calls; stdio/local (no HTTP headers) passes through. Verified: client
+without token → denied (`McpError`), with token → served.
+
+**FastMCP 3.4.2 specifics worth remembering:**
+- Transports: `"http"` (= streamable-http), `"stdio"`, `"sse"`; default HTTP mount path `/mcp`.
+- `get_http_headers()` **filters** sensitive headers by default — pass `include_all=True` to see
+  `Authorization`.
+- Client bearer auth: `Client(url, auth="<token>")`.
+- `run(transport=..., show_banner=False, **transport_kwargs)` — host/port go via kwargs.
+
+**Lessons:**
+- An MCP server must run correctly **from any working directory** — MCP hosts launch it from
+  elsewhere. Anchor to the project explicitly; never assume the CWD or trust the host's `cwd` field.
+- On stdio, treat **stdout as sacred** (protocol only). All human-facing output goes to stderr.
+- A logging/IO sink failure must never take down a long-running server — degrade, don't crash.
+- "Fail-closed at startup" is not authentication. Gate **every request**, and prove it with a
+  no-credentials smoke that expects a denial.
+- Reproduce the real host environment (foreign CWD, real client parsing stdout) — unit + in-memory
+  tests were all green while the Claude Desktop launch still failed three different ways.

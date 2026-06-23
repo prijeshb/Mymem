@@ -26,12 +26,14 @@ pages_app    = typer.Typer(name="pages", help="Wiki page identity operations (AD
 claims_app   = typer.Typer(name="claims", help="Compounding claims ledger ops (ADR-011/015).")
 export_app   = typer.Typer(name="export", help="Export the wiki to interchange formats (ADR-016).")
 import_app   = typer.Typer(name="import", help="Import interchange-format bundles into the wiki (ADR-016).")
+mcp_app      = typer.Typer(name="mcp", help="Serve the wiki to other agents over MCP (ADR-017).")
 app.add_typer(obsidian_app, name="obsidian")
 app.add_typer(graph_app, name="graph")
 app.add_typer(pages_app, name="pages")
 app.add_typer(claims_app, name="claims")
 app.add_typer(export_app, name="export")
 app.add_typer(import_app, name="import")
+app.add_typer(mcp_app, name="mcp")
 console = Console()
 err     = Console(stderr=True, style="red")
 
@@ -65,6 +67,28 @@ def _paths(settings):  # type: ignore[return]
     log_path     = wiki_dir / "log.md"
     curiosity_db = Path("data/curiosity.db")
     return wiki_dir, index_path, log_path, curiosity_db
+
+
+def _detect_project_root() -> Path | None:
+    """Best-effort MyMem project root for `mcp serve` launched from another CWD.
+
+    MCP hosts (Claude Desktop) spawn the server from a system directory, so relative
+    paths (wiki/, data/, config.yaml) won't resolve and `ensure_dirs()` fails. Prefer
+    the explicit `MYMEM_PROJECT_DIR`; otherwise derive the repo root from the installed
+    package location and validate it looks like a MyMem project. Returns None if no
+    confident root is found (callers then keep the current directory).
+    """
+    import os
+
+    env_root = os.environ.get("MYMEM_PROJECT_DIR")
+    if env_root and Path(env_root).is_dir():
+        return Path(env_root)
+
+    import mymem
+    pkg_root = Path(mymem.__file__).resolve().parent.parent
+    if any((pkg_root / marker).exists() for marker in ("config.yaml", "pyproject.toml", "wiki")):
+        return pkg_root
+    return None
 
 
 def _run(coro):  # type: ignore[return]
@@ -344,6 +368,75 @@ def tags() -> None:
 # ---------------------------------------------------------------------------
 # mymem export
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# mymem mcp serve  (ADR-017)
+# ---------------------------------------------------------------------------
+
+@mcp_app.command("serve")
+def mcp_serve(
+    transport: str = typer.Option(
+        "stdio", "--transport", "-t", help="stdio (local, default) | http (remote, token-gated)"
+    ),
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host for http transport"),
+    port: int = typer.Option(7861, "--port", "-p", help="Bind port for http transport"),
+    project_dir: str = typer.Option(
+        "", "--project-dir",
+        help="Project root to run from. Defaults to MYMEM_PROJECT_DIR or the install "
+             "location — needed because MCP hosts launch the server from elsewhere.",
+    ),
+) -> None:
+    """Expose the wiki to other agents over MCP (read-only: search/get_page/ask/gaps).
+
+    Tool payloads are OKF v0.1 concepts (ADR-016). `stdio` needs no token and is for
+    local clients (Claude Code/Desktop). `http` is remote and fail-closed: it refuses
+    to start unless MYMEM_MCP_TOKEN is set in your environment / .env.
+    """
+    import os
+
+    # MCP hosts spawn this from a system dir; anchor to the project so relative
+    # wiki/ and data/ paths resolve (and config.yaml loads) before settings load.
+    root = Path(project_dir) if project_dir else _detect_project_root()
+    if root and root.is_dir():
+        os.chdir(root)
+
+    settings = _get_settings()
+    settings.ensure_dirs()
+
+    if transport not in {"stdio", "http"}:
+        err.print(f"Unknown transport '{transport}'. Use 'stdio' or 'http'.")
+        raise typer.Exit(2)
+
+    token = os.environ.get("MYMEM_MCP_TOKEN")
+    if transport == "http" and not token:
+        err.print(
+            "Refusing to start remote MCP: set MYMEM_MCP_TOKEN in your .env first "
+            "(fail-closed). Use --transport stdio for local, token-free access."
+        )
+        raise typer.Exit(1)
+
+    from mymem.interop.mcp.context import context_from_settings
+    from mymem.interop.mcp.server import build_mcp_server
+
+    router = _make_router(settings)
+    ctx = context_from_settings(settings, router=router)
+
+    try:
+        # Per-request bearer auth is enforced only on the remote transport (ADR-017 F3).
+        server = build_mcp_server(ctx, auth_token=token if transport == "http" else None)
+    except ImportError as exc:
+        err.print(str(exc))
+        raise typer.Exit(1) from exc
+
+    if transport == "stdio":
+        # On stdio, stdout IS the JSON-RPC channel — nothing but protocol may be
+        # written there. Status/logs go to stderr; suppress FastMCP's stdout banner.
+        err.print("[dim]MyMem MCP server on stdio — connect an MCP client.[/]")
+        server.run(show_banner=False)
+    else:
+        err.print(f"[dim]MyMem MCP server on http://{host}:{port} (token-gated).[/]")
+        server.run(transport="http", host=host, port=port)
+
 
 @export_app.command("okf")
 def export_okf_cmd(

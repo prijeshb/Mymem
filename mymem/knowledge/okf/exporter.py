@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-from mymem.knowledge.okf._links import wikilinks_to_markdown
+from mymem.knowledge.okf._links import flatten_wikilinks, wikilinks_to_markdown
 from mymem.knowledge.okf._map import to_okf_frontmatter
 from mymem.knowledge.okf.conformance import check_bundle
 from mymem.observability.logger import get_logger
@@ -40,7 +40,7 @@ def _first_paragraph(body: str, *, limit: int = 200) -> str:
     for line in body.splitlines():
         stripped = line.strip().lstrip("*-> ").strip()
         if stripped and not _HEADING_RE.match(line.strip()):
-            return stripped[:limit]
+            return flatten_wikilinks(stripped)[:limit]
     return ""
 
 
