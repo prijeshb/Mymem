@@ -27,6 +27,25 @@ class TestLogger:
         configure_logging(level="DEBUG", fmt="rich")  # second call — no error
         log_module._configured = False  # clean up
 
+    def test_configure_logging_degrades_on_unwritable_log_dir(self, tmp_path):
+        """A log path that can't be created must NOT crash configure_logging.
+
+        Reproduces the MCP-host launch case where the CWD is a protected system
+        folder (PermissionError on `data/` mkdir). The server should keep running
+        with console-only logging. Here we force the same OSError cross-platform by
+        nesting the log dir *under an existing file*.
+        """
+        from mymem.observability import logger as log_module
+
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_text("x", encoding="utf-8")  # a file where a dir is expected
+        bad = blocker / "sub" / "mymem.log"  # mkdir(parents=True) here raises OSError
+
+        log_module._configured = False  # reset for test
+        configure_logging(level="INFO", fmt="json", log_file=bad)  # must not raise
+        get_logger("test").info("console still works after degrade")
+        log_module._configured = False  # clean up
+
     def test_run_id_propagation(self):
         rid = set_run_id("test123")
         assert get_run_id() == "test123"

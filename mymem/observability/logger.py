@@ -121,12 +121,19 @@ def configure_logging(
 
     root.addHandler(console_handler)
 
-    # File handler — always JSON so logs are parseable
+    # File handler — always JSON so logs are parseable. A logging sink must never
+    # crash the process: if the log dir can't be created/written (e.g. the CWD is a
+    # protected system folder when launched by an MCP host), degrade to console-only.
     if log_file is not None:
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(log_file, encoding="utf-8")
-        file_handler.setFormatter(_JSONFormatter())
-        root.addHandler(file_handler)
+        try:
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.FileHandler(log_file, encoding="utf-8")
+            file_handler.setFormatter(_JSONFormatter())
+            root.addHandler(file_handler)
+        except OSError as exc:
+            root.warning(
+                "File logging disabled — could not open log file %s (%s)", log_file, exc
+            )
 
 
 # ---------------------------------------------------------------------------
