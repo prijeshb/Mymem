@@ -65,6 +65,13 @@ class SecurityConfig(BaseSettings):
     scan_ingested_content: bool = True
     prompt_injection_guard: bool = True
     max_file_size_mb: int = 50
+    # Content safety (ADR-018) — per-category action. High-confidence detections
+    # escalate to "block" automatically where the category's action allows it.
+    pii: Literal["off", "flag", "redact", "block"] = "redact"
+    denylist: Literal["off", "flag", "block"] = "block"
+    nsfw: Literal["off", "flag", "block"] = "flag"
+    moderate_output: bool = True       # also inspect LLM-generated text before storing/serving
+    denylist_terms: list[str] = []     # user-supplied banned terms / topics
 
 
 class PipelineConfig(BaseSettings):

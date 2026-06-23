@@ -36,6 +36,7 @@
 | ADR-015 | Compounding ingest implementation decisions (Phase 1: span grounding substring+fuzzy, blank-not-drop, persist in Phase 2) | Accepted |
 | ADR-016 | Open Knowledge Format (OKF) integration (two-way interchange via export adapter + direct importer; not native storage) | Accepted |
 | ADR-017 | Agent-to-agent knowledge interop — MCP access layer + OKF payloads (read-only P1; contribute P2; A2A federation/sync P3) | Accepted (P1 built) |
+| ADR-018 | Content-safety layer — PII redaction, denylist, adult/toxicity moderation, output moderation (per-category, block-on-high-confidence) | Accepted (engine built) |
 
 ## Completed Features
 
@@ -77,6 +78,10 @@
 | Knowledge gaps: ranked referenced-but-unwritten concepts | `mymem/graph/gaps.py`, `cli.py`, `web/routes/api.py` | DONE — ADR-008 D12; `mymem graph gaps` + `GET /api/graph/gaps`; gaps.py 100% cov |
 | OKF (Open Knowledge Format) export + import | `mymem/knowledge/okf/`, `cli.py` | DONE — ADR-016; `mymem export okf` / `import okf`; lossless round-trip; okf pkg 99% cov |
 | MCP access layer (read-only) — wiki over MCP, OKF payloads | `mymem/interop/mcp/`, `cli.py` | DONE — ADR-017 Phase 1; `mymem mcp serve`; tools+resources delegate to internals; pure handlers 97–100% cov |
+| Web reader extracts clean text (not raw HTML) + router fallback logging | `mymem/pipeline/readers.py`, `router/_router.py` | DONE — fixed 380KB-HTML→LLM bug (1→9 pages on a real article); fallbacks logged to file |
+| Knowledge graph shared-concept edges | `mymem/graph/ui_edges.py`, `web/routes/api.py`, `frontend/.../GraphPage.tsx` | DONE — entity-graph edges connect 129/154 nodes (was 11); UI toggle + styling |
+| Frontend test infra (Vitest + RTL) | `frontend/vitest.config.ts`, `src/lib/graph.test.ts` | DONE — first frontend tests; `npm test` |
+| Content-safety engine (PII/denylist/moderation) | `mymem/security/{pii,denylist,moderation,content_safety}.py` | DONE — ADR-018 engine + 16 tests; enforcement wiring pending |
 
 ## Security Status
 - **Last Audit**: 2026-06-11
