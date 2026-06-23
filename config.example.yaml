@@ -1,0 +1,44 @@
+# MyMem configuration — copy to config.yaml and edit to taste.
+# config.yaml is gitignored (personal, like .env). With NO config.yaml these same
+# defaults apply, so a fresh clone runs locally out of the box. Secrets go in .env.
+
+# LLM provider: ollama (local, default) | anthropic | openai | nvidia | groq | openrouter
+# - ollama needs NO API key — just a running Ollama with the models below pulled.
+# - For a hosted provider: set it here AND put its key in .env (see .env.example).
+provider: ollama
+
+# Per-task models. Defaults are local Ollama models. When using a hosted provider,
+# point these at that provider's model ids instead.
+models:
+  compile:    gemma3:12b          # long-doc ingest
+  merge:      gemma3:12b          # merge compiled chunks
+  qa:         gemma3:12b          # wiki Q&A
+  lint:       gemma3:4b           # fast health checks
+  classify:   gemma3:4b           # domain/tag classification
+  introspect: gemma3:12b          # daily summary
+  embed:      nomic-embed-text    # embeddings (always local Ollama)
+
+ollama:
+  base_url: http://localhost:11434
+  timeout_s: 120
+
+observability:
+  log_level: INFO                 # DEBUG | INFO | WARNING | ERROR
+  log_format: rich                # rich (dev) | json (prod)
+  log_file: data/mymem.log        # null to disable file logging
+
+security:
+  scan_ingested_content: true     # scan ingested content for leaked credentials
+  prompt_injection_guard: true    # sanitize user input before the LLM
+  max_file_size_mb: 50
+  # Content safety (ADR-018) — per-category action: off | flag | redact | block
+  pii: redact                     # redact email/SSN/card/phone/IP in stored + served text
+  denylist: block                 # banned terms -> block
+  nsfw: flag                      # adult/toxicity -> flag (blocks on high confidence)
+  moderate_output: true           # also inspect LLM-generated text
+  denylist_terms: []              # your banned terms / topics
+
+pipeline:
+  compile_batch_size: 5
+  index_on_compile: true
+  skip_unchanged: true

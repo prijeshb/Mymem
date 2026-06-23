@@ -68,3 +68,5 @@ frontend/dist/
 # Coverage
 .coverage
 coverage/
+# Personal config — copy from config.example.yaml (defaults work with none)
+config.yaml

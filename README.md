@@ -64,27 +64,42 @@ Unlike pure RAG tools that index raw chunks, MyMem **accumulates knowledge** —
 
 ## Quick start
 
+Works the same on macOS, Linux, and Windows (Python ≥3.11 + Node for the UI).
+
 ### Backend
 
 ```bash
-# Install
+# 1. Create a virtualenv and install
+python -m venv venv
+#   macOS/Linux:  source venv/bin/activate
+#   Windows:      venv\Scripts\activate
 pip install -e ".[dev]"
 
-# (Optional) configure provider in config.yaml — defaults to local Ollama
-# provider: anthropic   # or openai
+# 2. (Optional) personalise config — sensible defaults apply with no config.yaml
+cp config.example.yaml config.yaml   # defaults to LOCAL Ollama, no API key needed
+cp .env.example .env                 # only needed for a hosted provider's key
 
-# Start the server
+# 3. Build the UI (served by the API at /), then start the server
+cd frontend && npm install && npm run build && cd ..
 mymem serve --port 7860
 ```
 
 Opens at **http://localhost:7860**
 
-### Frontend (dev mode)
+> **Providers:** the default is local **Ollama** (no key — just `ollama serve` with the
+> models in `config.example.yaml` pulled). To use a hosted provider, set `provider:` in
+> `config.yaml` and put its key in `.env`.
+>
+> **Windows note:** if you hit a `charmap` error, prefix commands with `PYTHONUTF8=1`
+> (PowerShell: `$env:PYTHONUTF8=1`).
+
+### Frontend (dev mode, hot reload)
 
 ```bash
 cd frontend
 npm install
 npm run dev        # Vite dev server on :5173, proxies /api → :7860
+npm test           # Vitest unit tests
 ```
 
 ### CLI
