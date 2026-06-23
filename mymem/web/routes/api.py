@@ -283,11 +283,31 @@ async def api_graph(request: Request) -> JSONResponse:
         }
         for p in pages
     ]
-    edges = []
+    edges: list[dict[str, object]] = []
     for page in pages:
         for link in page.wikilinks():
             if link in title_set:
-                edges.append({"source": page.title, "target": link})
+                edges.append({"source": page.title, "target": link, "type": "wikilink"})
+
+    # Shared-concept edges from the entity graph (ADR-007/008): connect pages that
+    # mention the same concept even without a direct wikilink — most pages have no
+    # page-to-page wikilink, so this is what makes the graph an actual network.
+    from mymem.graph.ui_edges import shared_entity_edges
+
+    graph_db: Path = request.app.state.db_path.parent / "graph.db"
+    id_to_title: dict[str, str] = {}
+    for p in pages:
+        if p.id:
+            id_to_title[p.id] = p.title
+        id_to_title[p.slug] = p.title  # legacy slug-anchored graphs
+    for se in shared_entity_edges(graph_db, id_to_title):
+        edges.append({
+            "source": se.source,
+            "target": se.target,
+            "type":   "shared",
+            "weight": se.weight,
+            "via":    list(se.via),
+        })
 
     return JSONResponse({"nodes": nodes, "edges": edges})
 

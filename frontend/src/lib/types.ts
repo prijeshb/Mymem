@@ -57,6 +57,12 @@ export interface GraphNode {
 export interface GraphEdge {
   source: string;
   target: string;
+  /** 'wikilink' = a resolved [[link]] between pages; 'shared' = pages that mention the same concept. */
+  type?: 'wikilink' | 'shared';
+  /** for 'shared' edges: how many concepts the two pages share. */
+  weight?: number;
+  /** for 'shared' edges: a few of the shared concept names. */
+  via?: string[];
 }
 
 export interface GraphData {

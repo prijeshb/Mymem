@@ -2,6 +2,7 @@ import * as d3 from 'd3';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchGraph } from '../lib/api';
+import { edgeType, visibleEdges } from '../lib/graph';
 import type { GraphData, GraphNode } from '../lib/types';
 import { ALL_DOMAINS } from '../lib/types';
 import { LoadingSpinner } from '../components/LoadingSpinner';
@@ -22,6 +23,7 @@ export function GraphPage() {
   const [data, setData]                 = useState<GraphData | null>(null);
   const [textFilter, setTextFilter]     = useState('');
   const [domainFilter, setDomainFilter] = useState('');
+  const [showShared, setShowShared]     = useState(true);
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState<string | null>(null);
 
@@ -48,16 +50,14 @@ export function GraphPage() {
 
     const filteredNodes = data.nodes.filter(nodeFilter);
     const nodeIds = new Set(filteredNodes.map(n => n.id));
-    const filteredEdges = data.edges.filter(
-      e => nodeIds.has(e.source as string) && nodeIds.has(e.target as string),
-    );
 
     const nodes: D3Node[] = filteredNodes.map(n => ({ ...n }));
     const nodeMap = new Map(nodes.map(n => [n.id, n]));
-    const edges = filteredEdges
+    const edges = visibleEdges(data.edges, nodeIds, showShared)
       .map(e => ({
-        source: nodeMap.get(e.source as string)!,
-        target: nodeMap.get(e.target as string)!,
+        source: nodeMap.get(e.source)!,
+        target: nodeMap.get(e.target)!,
+        type:   edgeType(e),
       }))
       .filter(e => e.source && e.target);
 
@@ -82,8 +82,12 @@ export function GraphPage() {
 
     const link = g.append('g').selectAll('line')
       .data(edges).join('line')
-      .attr('stroke', '#374151').attr('stroke-width', 1)
-      .attr('marker-end', 'url(#arrow)');
+      // wikilinks: solid + arrow; shared-concept edges: faint dashed, no arrow.
+      .attr('stroke', d => d.type === 'shared' ? '#4338ca' : '#374151')
+      .attr('stroke-opacity', d => d.type === 'shared' ? 0.35 : 0.9)
+      .attr('stroke-width', d => d.type === 'shared' ? 0.6 : 1.2)
+      .attr('stroke-dasharray', d => d.type === 'shared' ? '3,3' : null)
+      .attr('marker-end', d => d.type === 'shared' ? null : 'url(#arrow)');
 
     const node = g.append('g').selectAll<SVGCircleElement, D3Node>('circle')
       .data(nodes).join('circle')
@@ -118,7 +122,7 @@ export function GraphPage() {
     });
 
     return () => { sim.stop(); };
-  }, [data, textFilter, domainFilter, navigate]);
+  }, [data, textFilter, domainFilter, navigate, showShared]);
 
   return (
     <div className="flex flex-col gap-4" style={{ height: 'calc(100vh - 8rem)' }}>
@@ -141,9 +145,21 @@ export function GraphPage() {
           <option value="">All domains</option>
           {ALL_DOMAINS.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
+        <label className="flex items-center gap-1.5 text-xs text-gray-300 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showShared}
+            onChange={e => setShowShared(e.target.checked)}
+            className="accent-indigo-500"
+            aria-label="Show shared-concept edges"
+          />
+          <span className="inline-block w-4 border-t border-dashed border-indigo-500" aria-hidden />
+          Shared concepts
+        </label>
         {data && (
           <span className="text-xs text-gray-500 ml-auto">
-            {data.nodes.length} nodes · {data.edges.length} edges · Click to open · Drag to move · Scroll to zoom
+            {data.nodes.length} nodes · {data.edges.filter(e => e.type !== 'shared').length} links
+            {' · '}{data.edges.filter(e => e.type === 'shared').length} shared · Click to open · Drag to move
           </span>
         )}
       </div>
