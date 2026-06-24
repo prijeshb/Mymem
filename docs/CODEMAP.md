@@ -43,6 +43,9 @@
 | Re-key graph anchors slug→id | `mymem graph rekey` → `mymem/graph/backfill.py:rekey_graph_page_ids` (+ `store.init_db` column migration) | ADR-014 D6; idempotent |
 | Surface knowledge gaps (referenced-but-unwritten) | `mymem graph gaps` / `GET /api/graph/gaps` → `mymem/graph/gaps.py:knowledge_gaps` | ADR-008 D12; ranks pageless entities by inbound pages |
 | Export/import OKF bundles | `mymem export okf` / `mymem import okf` → `mymem/knowledge/okf/exporter.py`,`importer.py` | ADR-016; lossless round-trip; direct map (not LLM pipeline) |
+| Serve the wiki to other agents over MCP | `mymem mcp serve` → `mymem/interop/mcp/` | ADR-017; stdio default; http opt-in + per-request auth |
+| Change content safety (PII/denylist/moderation) | `mymem/security/content_safety.py` + `config.yaml security.{pii,denylist,nsfw}` | ADR-018; wired in `ingest.py` (input) + `interop/mcp/tools.py` (serve) |
+| Connect the UI graph (shared concepts) | `mymem/graph/ui_edges.py` → `/api/graph` (typed edges) + `GraphPage.tsx` toggle | edges tagged wikilink\|shared |
 | Change graph-on-ingest behavior | `mymem/pipeline/ingest_background.py` → `_graph_extract_background()` (anchors on `page_id`) | fire-and-forget |
 | Change RAG-on-ingest indexing | `mymem/pipeline/ingest_rag.py` → `_rag_index_pdf`/`_rag_index_wiki`/`_rag_index_text` | best-effort, never blocks |
 | Change a background eval on ingest | `mymem/pipeline/ingest_background.py` → `_eval_extraction_background`/`_eval_decision_agreement_background`; reference LLM via `_build_reference_llm` | fire-and-forget |
@@ -99,6 +102,7 @@ graph/                      Entity layer (ADR-007/008) — data/graph.db
   resolver.py               resolve_entities() — 3-tier: exact/alias → fuzzy+cosine → batched LLM judge
   backfill.py               seed_from_wiki(embed_fn/router opt-in) + classify_entities() + rekey_graph_page_ids() (ADR-014 D6)
   gaps.py                   knowledge_gaps()/gap_count() — rank referenced-but-unwritten concepts (ADR-008 D12)
+  ui_edges.py               shared_entity_edges() — page-pair edges from shared concepts (connects the UI graph)
 
 wiki/
   types.py                  WikiPage (incl. stable `id`), IndexEntry, LogEntry, LogOperation, TagDomain, slugify(), mint_id()
@@ -129,10 +133,20 @@ observability/
   tracer.py                 trace_llm() context manager — records LLM calls to SQLite
   ingest_analytics.py       YouTube ingest quality tracking
 
-security/
-  scanner.py                has_high_severity_secret() — blocks ingestion of secrets
+security/                   (ADR-018 content safety)
+  scanner.py                has_high_severity_secret() — blocks ingestion of leaked credentials
   sanitize.py               sanitize_for_prompt(), sanitize_query() — prompt injection scrubbing
   validate.py               Strict Pydantic models for API boundary validation
+  pii.py                    detect_pii()/redact_pii() — email/SSN/Luhn-card/phone/IPv4 → placeholders
+  denylist.py               check_denylist() — banned term/phrase matching (config terms)
+  moderation.py             classify_content() — lexicon adult/toxicity score + high-confidence flag
+  content_safety.py         inspect_content() — orchestrator: per-category allow<flag<block + escalation
+
+interop/                    (ADR-017) protocol surfaces for other agents
+  mcp/server.py             build_mcp_server() — FastMCP tools+resources (only fastmcp import; lazy)
+  mcp/tools.py              search_wiki/get_page/ask/list_concepts/knowledge_gaps (delegate; redact-on-serve)
+  mcp/resources.py          okf://index, okf://concept/{slug}
+  mcp/payloads.py · context.py · auth.py · middleware.py  — wire types · ctx · bearer gate + per-request auth
 
 web/
   app.py                    FastAPI factory — mounts routes, serves frontend/dist/, sets app.state.*

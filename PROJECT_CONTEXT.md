@@ -8,6 +8,9 @@
 - Testing: pytest + pytest-asyncio + pytest-cov (≥ 80% required)
 
 ## Current Branch
+- `V1-0015` — MCP access layer (ADR-017) + content-safety (ADR-018) + graph shared-concept edges +
+  frontend Vitest + web-reader/router fixes + portable clone-and-run. Stacked on V1-0014/0013.
+  Suite: 1006 backend + 5 frontend. Not yet pushed.
 - `V1-0013` — OKF (Open Knowledge Format) two-way interchange: `mymem export okf` + `import okf`
   (ADR-016). Stacked on V1-0012.
 - `V1-0012` — broken-link handling: opt-in semantic seed resolution + ranked knowledge gaps
