@@ -215,6 +215,29 @@ async def ingest_source(
             skip_reason="HIGH-severity secret detected in source — ingestion blocked",
         )
 
+    # 2b. Content safety (ADR-018) — PII redaction, denylist, adult/toxicity moderation.
+    # Redacting the source before extraction also keeps PII out of generated pages.
+    from mymem.security.content_safety import inspect_content
+
+    try:
+        from mymem.config import get_settings
+        security_cfg = get_settings().security
+    except Exception:  # never let config loading break ingestion
+        from mymem.config import SecurityConfig
+        security_cfg = SecurityConfig()
+    safety = inspect_content(source_text, security_cfg)
+    if safety.blocked:
+        log.warning("Content safety blocked source", source=source_name,
+                    reasons=list(safety.reasons))
+        return IngestResult(
+            source_path=source,
+            skipped=True,
+            skip_reason="Content safety blocked: " + "; ".join(safety.reasons),
+        )
+    if safety.reasons:
+        log.info("Content safety applied", source=source_name, reasons=list(safety.reasons))
+    source_text = safety.text
+
     # Sanitize source text before it enters any LLM prompt
     source_text, ingest_risk = sanitize_for_prompt(source_text)
     if ingest_risk.matched_patterns:

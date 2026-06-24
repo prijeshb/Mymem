@@ -212,6 +212,38 @@ def test_get_page_unknown_returns_none(ctx: WikiContext) -> None:
     assert tools.get_page(ctx, "does-not-exist") is None
 
 
+def test_get_page_redacts_pii_when_enabled(wiki: Path, tmp_path: Path) -> None:
+    # A page containing PII; serve it through a redact-on-serve context (ADR-018).
+    from mymem.wiki.types import TagDomain, WikiPage
+
+    write_page(
+        WikiPage(
+            title="Contact Card",
+            body="# Contact Card\n\nReach me at jane@acme.com or 555-123-4567.",
+            path=wiki / "contact-card.md",
+            domain=TagDomain.PERSONAL,
+            id="01TEST0000000000000000PIIX",
+        ),
+        stamp_updated=False,
+    )
+    redacting = WikiContext(
+        wiki_dir=wiki, index_path=wiki / "index.md", log_path=wiki / "log.md",
+        graph_db=tmp_path / "g.db", rag_db=tmp_path / "r.db", redact_pii=True,
+    )
+    payload = tools.get_page(redacting, "contact-card")
+    assert payload is not None
+    assert "[EMAIL]" in payload.body and "[PHONE]" in payload.body
+    assert "jane@acme.com" not in payload.body
+
+    # Default context (redact_pii=False) leaves content untouched.
+    plain = tools.get_page(
+        WikiContext(wiki_dir=wiki, index_path=wiki / "index.md", log_path=wiki / "log.md",
+                    graph_db=tmp_path / "g.db", rag_db=tmp_path / "r.db"),
+        "contact-card",
+    )
+    assert plain is not None and "jane@acme.com" in plain.body
+
+
 # ---------------------------------------------------------------------------
 # list_concepts
 # ---------------------------------------------------------------------------
@@ -301,7 +333,8 @@ def test_okf_concept_resource_missing(ctx: WikiContext) -> None:
 
 def test_context_from_settings_derives_paths(tmp_path: Path) -> None:
     settings = SimpleNamespace(
-        paths=SimpleNamespace(wiki=tmp_path / "wiki", db=tmp_path / "data" / "mymem.db")
+        paths=SimpleNamespace(wiki=tmp_path / "wiki", db=tmp_path / "data" / "mymem.db"),
+        security=SimpleNamespace(pii="redact"),
     )
     ctx = context_from_settings(settings)  # type: ignore[arg-type]
     assert ctx.index_path == tmp_path / "wiki" / "index.md"
@@ -309,6 +342,7 @@ def test_context_from_settings_derives_paths(tmp_path: Path) -> None:
     assert ctx.graph_db == tmp_path / "data" / "graph.db"
     assert ctx.rag_db == tmp_path / "data" / "rag.db"
     assert ctx.router is None
+    assert ctx.redact_pii is True  # pii != "off"
 
 
 # ---------------------------------------------------------------------------

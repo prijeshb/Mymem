@@ -22,6 +22,7 @@ class WikiContext:
     graph_db: Path
     rag_db: Path
     router: ModelRouter | None = None
+    redact_pii: bool = False   # redact PII in served content (ADR-018, redact-on-serve)
 
 
 def context_from_settings(
@@ -37,4 +38,5 @@ def context_from_settings(
         graph_db=db_parent / "graph.db",
         rag_db=db_parent / "rag.db",
         router=router,
+        redact_pii=settings.security.pii != "off",
     )

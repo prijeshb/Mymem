@@ -96,6 +96,22 @@ class TestIngestSource:
         assert len(result.pages_written) > 0
 
     @pytest.mark.asyncio
+    async def test_content_safety_blocks_explicit_source(self, tmp_path: Path):
+        # High-confidence adult content is blocked before any LLM call (ADR-018).
+        src = make_source_file(tmp_path, "This page is full of xxx porn explicit material.")
+        wiki_dir = tmp_path / "wiki"
+        wiki_dir.mkdir()
+        result = await ingest_source(
+            str(src),
+            wiki_dir=wiki_dir,
+            index_path=wiki_dir / "index.md",
+            log_path=wiki_dir / "log.md",
+            router=make_router(),
+        )
+        assert result.skipped
+        assert "content safety" in result.skip_reason.lower()
+
+    @pytest.mark.asyncio
     async def test_reingest_preserves_page_id(self, tmp_path: Path):
         # Regression (ADR-013): updating a page on re-ingest must NOT mint a new
         # id — the page's stable identity has to survive re-compilation.

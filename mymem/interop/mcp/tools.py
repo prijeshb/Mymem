@@ -14,6 +14,7 @@ from mymem.interop.mcp.context import WikiContext
 from mymem.interop.mcp.payloads import AskResult, ConceptPayload, ConceptStub, GapItem
 from mymem.knowledge.okf._links import flatten_wikilinks, wikilinks_to_markdown
 from mymem.knowledge.okf._map import to_okf_frontmatter
+from mymem.security.pii import redact_pii
 from mymem.wiki.index import IndexManager
 from mymem.wiki.page import list_pages, read_page
 from mymem.wiki.types import WikiPage, slugify
@@ -28,6 +29,13 @@ def _first_paragraph(body: str, *, limit: int = 200) -> str:
         if stripped and not _HEADING_RE.match(line.strip()):
             return flatten_wikilinks(stripped)[:limit]
     return ""
+
+
+def _maybe_redact(ctx: WikiContext, text: str) -> str:
+    """Redact PII in served content when the context requests it (ADR-018)."""
+    if not ctx.redact_pii or not text:
+        return text
+    return redact_pii(text)[0]
 
 
 def search_wiki(
@@ -45,7 +53,7 @@ def search_wiki(
             title=e.title,
             slug=Path(str(e.path)).stem,
             domain=e.domain.value,
-            description=e.summary,
+            description=_maybe_redact(ctx, e.summary),
         )
         for e in candidates[:limit]
     ]
@@ -69,13 +77,13 @@ def get_page(ctx: WikiContext, ref: str) -> ConceptPayload | None:
     if page is None:
         return None
     title_to_slug = {p.title: p.path.stem for p in list_pages(ctx.wiki_dir, include_archived=True)}
-    description = _first_paragraph(page.body)
+    description = _maybe_redact(ctx, _first_paragraph(page.body))
     frontmatter = to_okf_frontmatter(page, description=description)
     body, _unresolved = wikilinks_to_markdown(page.body, title_to_slug.get)
     return ConceptPayload(
         uri=f"okf://concept/{page.path.stem}.md",
         frontmatter=frontmatter,
-        body=body,
+        body=_maybe_redact(ctx, body),
     )
 
 
@@ -94,7 +102,7 @@ def list_concepts(
                 title=page.title,
                 slug=page.path.stem,
                 domain=page.domain.value,
-                description=_first_paragraph(page.body),
+                description=_maybe_redact(ctx, _first_paragraph(page.body)),
             )
         )
     return out
